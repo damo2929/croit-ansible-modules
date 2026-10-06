@@ -1,0 +1,62 @@
+---
+# croit.ceph.smb_group. Only runs when croit_test_smb_cluster names a generation-2 lab cluster
+# without Active Directory; the group is always removed again.
+- name: SMB group integration tests
+  when: croit_test_smb_cluster is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    group_name: ansibletestgrp
+  block:
+    - name: Create (check mode)
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+      register: r2
+    - name: Create again
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+      register: r3
+    - name: Assert create sequence
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+        state: absent
+      register: r2
+    - name: Delete again
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+        state: absent
+      register: r3
+    - name: Assert delete sequence
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+  always:
+    - name: Clean up the group
+      croit.ceph.smb_group:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ group_name }}"
+        state: absent
+      failed_when: false

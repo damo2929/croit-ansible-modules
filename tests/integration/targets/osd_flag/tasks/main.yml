@@ -1,0 +1,95 @@
+---
+# Uses noscrub, which is harmless for a short time, and always clears it again.
+- name: OSD flag integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Make sure noscrub starts cleared
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+        state: absent
+
+    - name: Set (check mode)
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - (r.flags | selectattr('name', 'equalto', 'noscrub') | first).currentState is false
+
+    - name: Set
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+      register: r
+    - name: Assert set
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - (r.flags | selectattr('name', 'equalto', 'noscrub') | first).currentState is true
+
+    - name: Set again
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+      register: r
+    - name: Assert set again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Set again (check mode)
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+      check_mode: true
+      register: r
+    - name: Assert set again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Unknown flag fails
+      croit.ceph.osd_flag:
+        flags: [no-such-flag]
+      register: r
+      ignore_errors: true
+    - name: Assert unknown flag fails
+      ansible.builtin.assert:
+        that: [r is failed]
+
+    - name: Unset (check mode)
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert unset (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Unset
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+        state: absent
+      register: r
+    - name: Assert unset
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Unset again
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+        state: absent
+      register: r
+    - name: Assert unset again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Always clear noscrub
+      croit.ceph.osd_flag:
+        flags: [noscrub]
+        state: absent
+      failed_when: false

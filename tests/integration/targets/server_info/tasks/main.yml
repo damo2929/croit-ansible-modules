@@ -1,0 +1,37 @@
+---
+- name: Server info integration tests (read-only)
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: All servers
+      croit.ceph.server_info:
+      register: all_servers
+    - name: Assert all servers
+      ansible.builtin.assert:
+        that:
+          - all_servers is not changed
+          - all_servers.servers | length > 0
+          - croit_test_server in (all_servers.servers | map(attribute='hostname') | list)
+
+    - name: Lab server with interfaces
+      croit.ceph.server_info:
+        servers: ["{{ croit_test_server }}"]
+        include_nics: true
+      register: one
+    - name: Assert lab server with interfaces
+      ansible.builtin.assert:
+        that:
+          - one.servers | length == 1
+          - one.servers[0].nics | length > 0
+
+    - name: Unknown server
+      croit.ceph.server_info:
+        servers: ["{{ croit_test_prefix | default('ansible-test') }}-no-such-server"]
+      register: missing
+      ignore_errors: true
+    - name: Assert unknown server fails
+      ansible.builtin.assert:
+        that: [missing is failed]

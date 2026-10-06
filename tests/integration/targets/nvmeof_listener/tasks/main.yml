@@ -1,0 +1,45 @@
+---
+# Needs croit_test_nvmeof_gateway and croit_test_nvmeof_listener ({service, nic, port}: an unused port).
+# Changes only with croit_test_nvmeof_allow_changes=true.
+- name: NVMe-oF listener integration tests
+  when: croit_test_nvmeof_gateway is defined and croit_test_nvmeof_listener is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    listener:
+      gateway: "{{ croit_test_nvmeof_gateway }}"
+      service: "{{ croit_test_nvmeof_listener.service }}"
+      nic: "{{ croit_test_nvmeof_listener.nic }}"
+      port: "{{ croit_test_nvmeof_listener.port }}"
+  block:
+    - name: Add (check mode)
+      croit.ceph.nvmeof_listener: "{{ listener }}"
+      check_mode: true
+      register: r
+    - name: Assert add (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Opt-in add / re-run / remove
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      block:
+        - name: Add
+          croit.ceph.nvmeof_listener: "{{ listener }}"
+          register: r
+        - name: Add again
+          croit.ceph.nvmeof_listener: "{{ listener }}"
+          register: r2
+        - name: Remove
+          croit.ceph.nvmeof_listener: "{{ listener | combine({'state': 'absent'}) }}"
+          register: r3
+        - name: Assert sequence
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed, r3 is changed]
+  always:
+    - name: Clean up
+      croit.ceph.nvmeof_listener: "{{ listener | combine({'state': 'absent'}) }}"
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      failed_when: false

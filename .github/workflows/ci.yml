@@ -1,0 +1,95 @@
+---
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  sanity:
+    name: Sanity (ansible-core ${{ matrix.ansible }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # stable-2.14 is the EL9 baseline (Python 3.9).
+        ansible: [stable-2.14, stable-2.15, stable-2.16, stable-2.17, stable-2.18, stable-2.19, stable-2.20, devel]
+    steps:
+      - uses: ansible-community/ansible-test-gh-action@release/v1
+        with:
+          ansible-core-version: ${{ matrix.ansible }}
+          testing-type: sanity
+
+  units:
+    name: Units (ansible-core ${{ matrix.ansible }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ansible: [stable-2.14, stable-2.16, stable-2.18, stable-2.20, devel]
+    steps:
+      - uses: ansible-community/ansible-test-gh-action@release/v1
+        with:
+          ansible-core-version: ${{ matrix.ansible }}
+          testing-type: units
+
+  el9:
+    name: EL9 smoke (distro ansible-core, Python 3.9)
+    runs-on: ubuntu-latest
+    container: quay.io/rockylinux/rockylinux:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ansible_collections/croit/ceph
+      - name: Install EL9 tooling
+        run: dnf -y install python3 python3-pip git-core && python3 -m pip install 'ansible-core>=2.14,<2.15' pytest
+      - name: Units and sanity on Python 3.9
+        working-directory: ansible_collections/croit/ceph
+        run: |
+          git config --global --add safe.directory "$PWD"
+          ansible-test units --python 3.9 --requirements
+          ansible-test sanity --python 3.9 --requirements
+
+  lint:
+    name: ansible-lint, docs, changelog, spec drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ansible_collections/croit/ceph
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install ansible-core ansible-lint antsibull-docs antsibull-changelog
+      - name: ansible-lint
+        working-directory: ansible_collections/croit/ceph
+        run: ansible-lint --profile production
+      - name: Collection docs lint
+        working-directory: ansible_collections/croit/ceph
+        run: antsibull-docs lint-collection-docs --plugin-docs .
+      - name: Changelog lint
+        working-directory: ansible_collections/croit/ceph
+        run: antsibull-changelog lint
+      - name: API spec drift
+        working-directory: ansible_collections/croit/ceph
+        run: python tools/check_spec_drift.py
+
+  galaxy-importer:
+    name: Build and galaxy-importer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install ansible-core galaxy-importer
+      - name: Build
+        run: ansible-galaxy collection build --force
+      - name: galaxy-importer
+        env:
+          GALAXY_IMPORTER_CONFIG: ${{ github.workspace }}/.github/galaxy-importer.cfg
+        run: python -m galaxy_importer.main croit-ceph-*.tar.gz

@@ -1,0 +1,129 @@
+---
+# croit.ceph.smb_cluster. Read-only (a check-mode no-op on croit_test_smb_cluster) unless
+# croit_test_smb_create is defined, which creates a throwaway simple cluster and always removes it:
+#   croit_test_smb_create:
+#     servers: [{server: lab-node-1, nic: eth0}]
+#     virtual_ips: [10.0.0.240/24]
+#     admin_password: CHANGE_ME
+- name: SMB cluster integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    cluster_name: "{{ croit_test_prefix | default('ansible-test') }}-smb"
+  block:
+    - name: Existing cluster is unchanged (check mode)
+      croit.ceph.smb_cluster:
+        name: "{{ croit_test_smb_cluster }}"
+      check_mode: true
+      register: r
+      when: croit_test_smb_cluster is defined
+    - name: Assert existing cluster unchanged
+      ansible.builtin.assert:
+        that: [r is not changed]
+      when: croit_test_smb_cluster is defined
+
+    - name: Throwaway cluster
+      when: croit_test_smb_create is defined
+      block:
+        - name: Create (check mode)
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            type: simple
+            servers: "{{ croit_test_smb_create.servers }}"
+            virtual_ips: "{{ croit_test_smb_create.virtual_ips }}"
+            initial_users:
+              - username: ansibletest
+                password: "{{ croit_test_smb_create.admin_password }}"
+          check_mode: true
+          register: r
+        - name: Assert create (check mode)
+          ansible.builtin.assert:
+            that: [r is changed, r.cluster | length == 0]
+
+        - name: Create
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            type: simple
+            servers: "{{ croit_test_smb_create.servers }}"
+            virtual_ips: "{{ croit_test_smb_create.virtual_ips }}"
+            initial_users:
+              - username: ansibletest
+                password: "{{ croit_test_smb_create.admin_password }}"
+          no_log: true
+          register: r
+        - name: Assert create
+          ansible.builtin.assert:
+            that: [r is changed, r.cluster.description == cluster_name]
+
+        - name: Create again
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            servers: "{{ croit_test_smb_create.servers }}"
+            virtual_ips: "{{ croit_test_smb_create.virtual_ips }}"
+          register: r
+        - name: Assert create again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Update (check mode)
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            share_defaults:
+              vfs_objects: [catia]
+          check_mode: true
+          register: r
+        - name: Assert update (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Update
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            share_defaults:
+              vfs_objects: [catia]
+          register: r
+        - name: Update again
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            share_defaults:
+              vfs_objects: [catia]
+          register: r2
+        - name: Assert update and update again
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed]
+
+        - name: Delete without confirmation
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            state: absent
+          register: r
+          ignore_errors: true
+        - name: Assert delete without confirmation fails
+          ansible.builtin.assert:
+            that: [r is failed]
+
+        - name: Delete
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            state: absent
+            confirm_delete: true
+          register: r
+        - name: Delete again
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            state: absent
+            confirm_delete: true
+          register: r2
+        - name: Assert delete and delete again
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed]
+      always:
+        - name: Clean up the throwaway cluster
+          croit.ceph.smb_cluster:
+            name: "{{ cluster_name }}"
+            state: absent
+            confirm_delete: true
+          failed_when: false

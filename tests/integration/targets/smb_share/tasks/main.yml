@@ -1,0 +1,78 @@
+---
+# croit.ceph.smb_share. Only runs when croit_test_smb_cluster names an existing generation-2 lab
+# cluster; the share is created, changed and always removed again (its directory stays in CephFS).
+- name: SMB share integration tests
+  when: croit_test_smb_cluster is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    share_name: "{{ croit_test_prefix | default('ansible-test') }}-share"
+    share_spec:
+      cluster: "{{ croit_test_smb_cluster }}"
+      name: "{{ share_name }}"
+      path: "/{{ croit_test_prefix | default('ansible-test') }}-smb-share"
+  block:
+    - name: Create (check mode)
+      croit.ceph.smb_share: "{{ share_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.smb_share: "{{ share_spec }}"
+      register: r
+    - name: Create again
+      croit.ceph.smb_share: "{{ share_spec }}"
+      register: r2
+    - name: Assert create and create again
+      ansible.builtin.assert:
+        that: [r is changed, r2 is not changed, r.share.share == share_name]
+
+    - name: Update (check mode)
+      croit.ceph.smb_share: "{{ share_spec | combine({'vfs_objects': ['catia']}) }}"
+      check_mode: true
+      register: r
+    - name: Update
+      croit.ceph.smb_share: "{{ share_spec | combine({'vfs_objects': ['catia']}) }}"
+      register: r2
+    - name: Update again
+      croit.ceph.smb_share: "{{ share_spec | combine({'vfs_objects': ['catia']}) }}"
+      register: r3
+    - name: Assert update sequence
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.smb_share:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ share_name }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.smb_share:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ share_name }}"
+        state: absent
+      register: r2
+    - name: Delete again
+      croit.ceph.smb_share:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ share_name }}"
+        state: absent
+      register: r3
+    - name: Assert delete sequence
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+  always:
+    - name: Clean up the share
+      croit.ceph.smb_share:
+        cluster: "{{ croit_test_smb_cluster }}"
+        name: "{{ share_name }}"
+        state: absent
+      failed_when: false

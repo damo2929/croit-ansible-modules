@@ -1,0 +1,75 @@
+---
+# Set/change sequence for croit.ceph.cluster_tuning (the knobs cannot be unset). Only recovery speed and
+# the nearfull ratio are touched; both are restored.
+- name: Cluster tuning integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the original values (a no-op set reads them)
+      croit.ceph.cluster_tuning:
+        recovery_speed: 10
+        full_ratios: {}
+      check_mode: true
+      register: original
+
+    - name: Pick test values
+      ansible.builtin.set_fact:
+        speed_a: "{{ 4 if original.tuning.recovery_speed != 4 else 5 }}"
+        speed_b: "{{ 6 if original.tuning.recovery_speed != 6 else 7 }}"
+        nearfull: "{{ ((original.tuning.full_ratios.nearfull | float) - 0.01) | round(2) }}"
+
+    - name: Set (check mode)
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_a | int }}"
+        full_ratios:
+          nearfull: "{{ nearfull | float }}"
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Set
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_a | int }}"
+        full_ratios:
+          nearfull: "{{ nearfull | float }}"
+      register: r
+    - name: Set again
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_a | int }}"
+        full_ratios:
+          nearfull: "{{ nearfull | float }}"
+      register: r2
+    - name: Assert set
+      ansible.builtin.assert:
+        that: [r is changed, r2 is not changed, r.tuning.recovery_speed == speed_a | int]
+
+    - name: Change (check mode)
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_b | int }}"
+      check_mode: true
+      register: r
+    - name: Change
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_b | int }}"
+      register: r2
+    - name: Change again
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ speed_b | int }}"
+      register: r3
+    - name: Assert change
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Restore the original values
+      croit.ceph.cluster_tuning:
+        recovery_speed: "{{ original.tuning.recovery_speed }}"
+        full_ratios:
+          nearfull: "{{ original.tuning.full_ratios.nearfull }}"
+      when: original.tuning is defined
+      failed_when: false

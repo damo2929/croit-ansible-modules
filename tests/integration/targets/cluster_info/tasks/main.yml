@@ -1,0 +1,26 @@
+---
+- name: Cluster info integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Gather everything (check mode)
+      croit.ceph.cluster_info:
+      check_mode: true
+      register: r
+    - name: Assert cluster info
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r.version is string
+          - r.status is mapping
+          - r.backend is mapping
+
+    - name: Running tasks
+      croit.ceph.task_info:
+      register: t
+    - name: Assert task info
+      ansible.builtin.assert:
+        that: [t is not changed, t.tasks is sequence]

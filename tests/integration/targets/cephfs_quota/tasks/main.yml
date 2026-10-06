@@ -1,0 +1,138 @@
+---
+# Set / change / unset sequence for croit.ceph.cephfs_quota.
+# Works on the directory of a throwaway subvolume group (/volumes/<group>).
+- name: CephFS quota integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    group_name: "{{ croit_test_prefix | default('ansible-test') }}-qgroup"
+    volume_name: "{{ croit_test_cephfs_volume | default(omit) }}"
+    dir_path: "/volumes/{{ group_name }}"
+  block:
+    - name: Directory to put the quota on
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+
+    - name: Set (check mode)
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 1G
+        max_files: 1000
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Set
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 1G
+        max_files: 1000
+      register: r
+    - name: Assert set
+      ansible.builtin.assert:
+        that: [r is changed, r.quota.maxBytes == 1073741824, r.quota.maxFiles == 1000]
+
+    - name: Set again
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 1G
+        max_files: 1000
+      register: r
+    - name: Assert set again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Set again (check mode)
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 1G
+        max_files: 1000
+      check_mode: true
+      register: r
+    - name: Assert set again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Change (check mode)
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 2G
+      check_mode: true
+      register: r
+    - name: Assert change (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.quota.maxBytes == 1073741824]
+
+    - name: Change
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 2G
+      register: r
+    - name: Assert change keeps the file limit
+      ansible.builtin.assert:
+        that: [r is changed, r.quota.maxBytes == 2147483648, r.quota.maxFiles == 1000]
+
+    - name: Change again
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        max_bytes: 2G
+      register: r
+    - name: Assert change again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Unset (check mode)
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert unset (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Unset
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        state: absent
+      register: r
+    - name: Assert unset
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - not r.quota.maxBytes
+          - not r.quota.maxFiles
+
+    - name: Unset again
+      croit.ceph.cephfs_quota:
+        volume: "{{ volume_name }}"
+        path: "{{ dir_path }}"
+        state: absent
+      register: r
+    - name: Assert unset again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up the group
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

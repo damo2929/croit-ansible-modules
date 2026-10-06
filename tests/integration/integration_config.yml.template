@@ -1,0 +1,60 @@
+---
+# Copy to integration_config.yml (git-ignored) and point it at a LAB croit cluster.
+# NEVER use a production cluster: the targets create and delete pools.
+croit_api_url: https://croit-lab-mgmt/api
+croit_api_token: CHANGE_ME
+croit_validate_certs: true
+# Prefix for every resource the tests create, so leftovers are easy to spot.
+croit_test_prefix: ansible-test
+# Optional: existing CephFS volume the cephfs_* targets work in (croit's default volume when unset).
+# croit_test_cephfs_volume: cephfs
+# Subnet that must NOT exist on the lab cluster; the network target creates and deletes it.
+croit_test_network_cidr: 198.51.100.0/24
+# Set true to let the config_backup target really toggle cloud backups (restored afterwards).
+croit_test_backup_writes: false
+# Optional: the oidc_provider target only runs when a reachable OIDC discovery URL is given.
+# croit_test_oidc_discovery_url: https://idp.example.com/realms/lab/.well-known/openid-configuration
+# croit_test_oidc_client_id: croit-ansible-test
+# croit_test_oidc_client_secret: CHANGE_ME
+# Optional: the setting target only runs when given a harmless croit setting and two values to toggle.
+# croit_test_setting: {name: SOME_SETTING, value_a: "1", value_b: "2"}
+# Optional: the config_template target only runs when given a template id (it is restored afterwards).
+# croit_test_template: some-template-id
+# Phase 3 targets. croit_test_server is required by the server* targets: a LAB server whose notes are changed and restored.
+# croit_test_server: lab-node-1
+# Optional: two spare interfaces for the server_bond target (check mode only).
+# croit_test_bond_members: [eth2, eth3]
+# Optional: interface and unused VLAN tag; the server_vlan target creates and deletes a VLAN without addresses.
+# croit_test_vlan_nic: eth2
+# croit_test_vlan: 4000
+# Optional OSD/service targets (read-only or check mode unless the *_allow_* switches are set).
+# croit_test_osd_id: 0
+# croit_test_osd_allow_changes: false
+# croit_test_osd_server: lab-node-1
+# croit_test_osd_disk: /dev/sdz
+# croit_test_osd_allow_wipe: false   # true CREATES AN OSD AND ERASES croit_test_osd_disk
+# croit_test_service_server: lab-node-1
+# croit_test_service_type: rgw       # a non-critical service that may be stopped and started
+# Optional: the ipmi target (identify LED only) is skipped unless set.
+# croit_test_ipmi_server: lab-node-1
+# Optional: the ha_group target is skipped unless both are set; the VIP must be unused.
+# croit_test_ha_servers: [{server: lab-node-1, nic: eth0}, {server: lab-node-2, nic: eth0}]
+# croit_test_ha_vip: 10.0.0.250/24
+# Optional iSCSI targets: client/group/disk targets only run when writes are allowed.
+# croit_test_iscsi_writes: false
+# croit_test_iscsi_pool: iscsi
+# Optional RGW targets (real changes only when set; cleaned up afterwards).
+# croit_test_rgw_server: lab-node-3            # a server WITHOUT an RGW gateway
+# croit_test_rgw_placement_pool: rgw-test-data  # an existing replicated pool
+# Optional NFS / cephfs-guard targets (throwaway resources, opt-in).
+# croit_test_nfs_servers: [lab-node-1, lab-node-2]
+# croit_test_guard_servers: [{server: lab-node-1, nic: eth0}]   # refuses if croit_test_cephfs_volume is already guarded
+# Optional SMB targets: share/user/group targets need an existing gen-2, non-AD lab cluster.
+# croit_test_smb_cluster: lab-smb
+# Opt-in: create and delete a throwaway SMB cluster.
+# croit_test_smb_create: {servers: [lab-node-1, lab-node-2], virtual_ips: [10.0.0.251/24], admin_password: CHANGE_ME}
+# Optional NVMe-oF targets (check mode / read-only unless allow_changes is true).
+# croit_test_nvmeof_gateway: lab-nvmeof
+# croit_test_nvmeof_allow_changes: false
+# croit_test_nvmeof_image: {pool: rbd, image: nvmeof-test}   # existing throwaway image; never deleted
+# croit_test_nvmeof_listener: {service: lab-node-1, nic: eth0, port: 4421}

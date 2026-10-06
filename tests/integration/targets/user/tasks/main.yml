@@ -1,0 +1,78 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.user.
+- name: User integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    user_name: "{{ croit_test_prefix | default('ansible-test') }}-user"
+    user_spec:
+      username: "{{ user_name }}"
+      roles: [viewer]
+      password: "Ansible-Test-{{ 999999 | random(seed=user_name) }}"
+    user_update: "{{ user_spec | combine({'roles': ['viewer', 'securefolder']}) }}"
+    user_gone:
+      username: "{{ user_name }}"
+      state: absent
+  block:
+    - name: Create (check mode)
+      croit.ceph.user: "{{ user_spec }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.user: "{{ user_spec }}"
+      register: r2
+    - name: Create again
+      croit.ceph.user: "{{ user_spec }}"
+      register: r3
+    - name: Create again (check mode)
+      croit.ceph.user: "{{ user_spec }}"
+      check_mode: true
+      register: r4
+    - name: Assert create
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r2.user.username == user_name
+          - r3 is not changed
+          - r4 is not changed
+
+    - name: Update (check mode)
+      croit.ceph.user: "{{ user_update }}"
+      check_mode: true
+      register: r
+    - name: Update
+      croit.ceph.user: "{{ user_update }}"
+      register: r2
+    - name: Update again
+      croit.ceph.user: "{{ user_update }}"
+      register: r3
+    - name: Assert update
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r2.user.roles | sort == ['securefolder', 'viewer']
+          - r3 is not changed
+
+    - name: Delete (check mode)
+      croit.ceph.user: "{{ user_gone }}"
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.user: "{{ user_gone }}"
+      register: r2
+    - name: Delete again
+      croit.ceph.user: "{{ user_gone }}"
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.user: "{{ user_gone }}"
+      failed_when: false

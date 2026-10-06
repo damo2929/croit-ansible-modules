@@ -1,0 +1,76 @@
+---
+# Check mode by default. Set croit_test_rgw_server to a lab server WITHOUT a gateway to really
+# add one and remove it again.
+- name: RGW service integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the servers
+      croit.ceph.server_info:
+      register: servers
+
+    - name: Add a gateway (check mode)
+      croit.ceph.rgw_service:
+        servers: ["{{ croit_test_rgw_server | default(servers.servers[0].hostname) }}"]
+      check_mode: true
+      register: r
+
+    - name: Assert check mode result
+      ansible.builtin.assert:
+        that: [r.gateways is sequence]
+
+    - name: Real add and remove
+      when: croit_test_rgw_server is defined
+      block:
+        - name: Add a gateway
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+          register: r
+        - name: Assert add
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Add again
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+          register: r
+        - name: Assert add again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Remove (check mode)
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+            state: absent
+          check_mode: true
+          register: r
+        - name: Assert remove (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Remove
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+            state: absent
+          register: r
+        - name: Assert remove
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Remove again
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+            state: absent
+          register: r
+        - name: Assert remove again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+      always:
+        - name: Clean up the test gateway
+          croit.ceph.rgw_service:
+            servers: ["{{ croit_test_rgw_server }}"]
+            state: absent
+          failed_when: false

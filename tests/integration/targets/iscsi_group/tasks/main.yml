@@ -1,0 +1,107 @@
+---
+# Opt-in: needs an existing gateway and croit_test_iscsi_writes=true. Creates a throwaway initiator, group and
+# small image in croit_test_iscsi_pool, and deletes them afterwards.
+- name: Test iSCSI group integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_iscsi_writes | default(false) | bool
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    member: "iqn.2026-10.io.croit:{{ prefix }}-member"
+    group_spec:
+      name: "{{ prefix }}-group"
+      members: ["iqn.2026-10.io.croit:{{ prefix }}-member"]
+      disks:
+        - pool: "{{ croit_test_iscsi_pool | default('iscsi') }}"
+          image: "{{ prefix }}-group-disk"
+          size: 64M
+  block:
+    - name: Create a member initiator
+      croit.ceph.iscsi_client:
+        iqn: "{{ member }}"
+        chap_username: "{{ prefix }}-user"
+        chap_password: AnsibleTest01
+
+    - name: Create (check mode)
+      croit.ceph.iscsi_group: "{{ group_spec }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.iscsi_group: "{{ group_spec }}"
+      register: r2
+    - name: Create again
+      croit.ceph.iscsi_group: "{{ group_spec }}"
+      register: r3
+    - name: Assert create
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r3 is not changed
+          - r2.group.members == [member]
+
+    - name: Remove the member (check mode)
+      croit.ceph.iscsi_group: "{{ group_spec | combine({'members': [], 'exclusive': true, 'ignore_warnings': true}) }}"
+      check_mode: true
+      register: r
+    - name: Remove the member
+      croit.ceph.iscsi_group: "{{ group_spec | combine({'members': [], 'exclusive': true, 'ignore_warnings': true}) }}"
+      register: r2
+    - name: Remove the member again
+      croit.ceph.iscsi_group: "{{ group_spec | combine({'members': [], 'exclusive': true, 'ignore_warnings': true}) }}"
+      register: r3
+    - name: Assert update
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r3 is not changed
+
+    - name: Delete (check mode)
+      croit.ceph.iscsi_group:
+        name: "{{ group_spec.name }}"
+        state: absent
+        ignore_warnings: true
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.iscsi_group:
+        name: "{{ group_spec.name }}"
+        state: absent
+        ignore_warnings: true
+      register: r2
+    - name: Delete again
+      croit.ceph.iscsi_group:
+        name: "{{ group_spec.name }}"
+        state: absent
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r3 is not changed
+
+  always:
+    - name: Remove the test group
+      croit.ceph.iscsi_group:
+        name: "{{ prefix }}-group"
+        state: absent
+        ignore_warnings: true
+      failed_when: false
+    - name: Remove the test initiator
+      croit.ceph.iscsi_client:
+        iqn: "{{ member }}"
+        state: absent
+      failed_when: false
+    - name: Unexport and delete the test image
+      croit.ceph.iscsi_disk:
+        pool: "{{ croit_test_iscsi_pool | default('iscsi') }}"
+        image: "{{ prefix }}-group-disk"
+        state: absent
+        delete_image: true
+        confirm_delete: true
+      failed_when: false

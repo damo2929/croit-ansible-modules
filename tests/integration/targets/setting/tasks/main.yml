@@ -1,0 +1,92 @@
+---
+# Set/unset sequence for croit.ceph.setting and setting_info. croit settings can restart services, so this
+# only runs when croit_test_setting is defined, e.g.
+#   croit_test_setting: {name: "<a harmless setting>", value_a: ..., value_b: ...}
+- name: Croit setting integration tests
+  when: croit_test_setting is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the original state
+      croit.ceph.setting_info:
+        name: "{{ croit_test_setting.name }}"
+        available: true
+      register: original
+    - name: Assert the setting exists
+      ansible.builtin.assert:
+        that: [original.settings | length == 1]
+
+    - name: Set (check mode)
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ croit_test_setting.value_a }}"
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed or original.settings[0].customized
+
+    - name: Set
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ croit_test_setting.value_a }}"
+    - name: Set again
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ croit_test_setting.value_a }}"
+      register: r
+    - name: Assert set again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Change
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ croit_test_setting.value_b }}"
+      register: r
+    - name: Change again
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ croit_test_setting.value_b }}"
+      register: r2
+    - name: Assert change
+      ansible.builtin.assert:
+        that: [r is changed, r2 is not changed]
+
+    - name: Unset
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        state: absent
+      register: r
+    - name: Unset again
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        state: absent
+      register: r2
+    - name: Assert unset
+      ansible.builtin.assert:
+        that: [r is changed, r2 is not changed]
+
+  always:
+    - name: Restore the original value
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        value: "{{ original.settings[0].value }}"
+      when:
+        - original.settings is defined
+        - original.settings | length == 1
+        - original.settings[0].customized
+      failed_when: false
+    - name: Restore the default
+      croit.ceph.setting:
+        name: "{{ croit_test_setting.name }}"
+        state: absent
+      when:
+        - original.settings is defined
+        - original.settings | length == 1
+        - not original.settings[0].customized
+      failed_when: false

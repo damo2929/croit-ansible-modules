@@ -1,0 +1,31 @@
+---
+- name: Disk info integration tests (read-only)
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: All disks
+      croit.ceph.disk_info:
+      register: all_disks
+    - name: Assert all disks
+      ansible.builtin.assert:
+        that: [all_disks is not changed, all_disks.disks | length > 0]
+
+    - name: Disks of the lab server
+      croit.ceph.disk_info:
+        server: "{{ croit_test_server }}"
+      register: mine
+    - name: Assert disks of the lab server
+      ansible.builtin.assert:
+        that:
+          - mine.disks | map(attribute='hostname') | unique | list in [[], [croit_test_server]]
+
+    - name: OSD disks only
+      croit.ceph.disk_info:
+        roles: [osd]
+      register: osds
+    - name: Assert role filter
+      ansible.builtin.assert:
+        that: osds.disks | rejectattr('role', 'eq', 'osd') | list | length == 0

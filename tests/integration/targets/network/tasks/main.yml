@@ -1,0 +1,121 @@
+---
+# Standard idempotency sequence for croit.ceph.network and croit.ceph.network_info.
+# Uses croit_test_network_cidr, a subnet that must NOT exist on the lab cluster (default: a
+# documentation range no real network uses). Existing networks are never touched.
+- name: Network integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    test_cidr: "{{ croit_test_network_cidr | default('198.51.100.0/24') }}"
+    net_spec:
+      cidr: "{{ test_cidr }}"
+      type: other
+      description: created by ansible-test
+  block:
+    - name: Make sure the test network is free
+      croit.ceph.network_info:
+        cidr: "{{ test_cidr }}"
+      register: pre
+    - name: Refuse to run against an existing network
+      ansible.builtin.assert:
+        that: [pre.networks | length == 0]
+        fail_msg: "{{ test_cidr }} already exists on this cluster; set croit_test_network_cidr to a free subnet"
+
+    - name: Create (check mode)
+      croit.ceph.network: "{{ net_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.network | length == 0]
+
+    - name: Create
+      croit.ceph.network: "{{ net_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.network.type == 'other']
+
+    - name: Create again
+      croit.ceph.network: "{{ net_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.network: "{{ net_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.network: "{{ net_spec | combine({'mtu': 9000, 'description': 'updated by ansible-test'}) }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Read after update (check mode)
+      croit.ceph.network_info:
+        cidr: "{{ test_cidr }}"
+      register: unchanged
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.diff.after.mtu == 9000
+          - unchanged.networks[0].mtu in [none, 1500]
+
+    - name: Update
+      croit.ceph.network: "{{ net_spec | combine({'mtu': 9000, 'description': 'updated by ansible-test'}) }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.network.mtu == 9000, r.network.type == 'other']
+
+    - name: Update again
+      croit.ceph.network: "{{ net_spec | combine({'mtu': 9000, 'description': 'updated by ansible-test'}) }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.network:
+        cidr: "{{ test_cidr }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.network:
+        cidr: "{{ test_cidr }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.network:
+        cidr: "{{ test_cidr }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up the test network only if this run created it
+      croit.ceph.network:
+        cidr: "{{ test_cidr }}"
+        state: absent
+      when: pre.networks is defined and pre.networks | length == 0
+      failed_when: false

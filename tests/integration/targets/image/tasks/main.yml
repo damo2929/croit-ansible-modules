@@ -1,0 +1,28 @@
+---
+# Read-only: only check mode runs against the lab, nothing is downloaded or changed.
+- name: Image integration tests (check mode only)
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Latest x86_64 image (check mode)
+      croit.ceph.image:
+        latest: true
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert the latest image was found
+      ansible.builtin.assert:
+        that: [r.image.id is string, r.diff.before.arch == 'x86_64']
+
+    - name: Current registry and architectures (check mode, no change requested)
+      croit.ceph.image_config:
+        archs:
+          x86_64: true
+      check_mode: true
+      register: c
+    - name: Assert x86_64 is already enabled
+      ansible.builtin.assert:
+        that: [c is not changed, c.archs.x86_64]

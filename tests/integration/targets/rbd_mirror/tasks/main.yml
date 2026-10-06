@@ -1,0 +1,72 @@
+---
+# Single-cluster: enables image-mode mirroring and a schedule on a throwaway pool, then turns it off again.
+- name: RBD mirror integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    pool_name: "{{ croit_test_prefix | default('ansible-test') }}-mirror"
+    mirror_spec:
+      pool: "{{ pool_name }}"
+      mode: image
+      site_name: "{{ croit_test_prefix | default('ansible-test') }}-site"
+      schedules:
+        - interval: 1h
+  block:
+    - name: Test pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        application: rbd
+        pg_num: 8
+
+    - name: Enable (check mode)
+      croit.ceph.rbd_mirror: "{{ mirror_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert enable (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.mirror.poolMirrorMode == 'disabled']
+
+    - name: Enable
+      croit.ceph.rbd_mirror: "{{ mirror_spec }}"
+      register: r
+    - name: Assert enable
+      ansible.builtin.assert:
+        that: [r is changed, r.mirror.poolMirrorMode == 'image']
+
+    - name: Enable again
+      croit.ceph.rbd_mirror: "{{ mirror_spec }}"
+      register: r
+    - name: Assert enable again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Disable
+      croit.ceph.rbd_mirror:
+        pool: "{{ pool_name }}"
+        mode: disabled
+        schedules: []
+        purge_schedules: true
+        ignore_warnings: true
+      register: r
+    - name: Assert disable
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Disable again
+      croit.ceph.rbd_mirror:
+        pool: "{{ pool_name }}"
+        mode: disabled
+      register: r
+    - name: Assert disable again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+  always:
+    - name: Remove the test pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

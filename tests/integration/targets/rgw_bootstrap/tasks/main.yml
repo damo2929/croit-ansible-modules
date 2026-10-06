@@ -1,0 +1,24 @@
+---
+# Read-only: bootstrapping cannot be undone, so it only runs in check mode.
+- name: RGW bootstrap integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the servers
+      croit.ceph.server_info:
+      register: servers
+
+    - name: Bootstrap (check mode)
+      croit.ceph.rgw_bootstrap:
+        servers: ["{{ servers.servers[0].hostname }}"]
+      check_mode: true
+      register: r
+
+    - name: Assert check mode made a prediction
+      ansible.builtin.assert:
+        that:
+          - r.gateways is sequence
+          - (r.gateways | length > 0) == (r is not changed)

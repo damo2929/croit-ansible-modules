@@ -1,0 +1,127 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.cephfs_volume.
+# Creates a throwaway CephFS volume (and its pools), so only run it on a lab cluster.
+- name: CephFS volume integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    volume_name: "{{ croit_test_prefix | default('ansible-test') }}-fs"
+  block:
+    - name: Create (check mode)
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.volume | length == 0
+
+    - name: Create
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+      register: r
+    - name: Remember the volume's pools for clean-up
+      ansible.builtin.set_fact:
+        volume_pools: "{{ [r.volume.metadataPool] + r.volume.dataPools }}"
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.volume.name == volume_name]
+
+    - name: Create again
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        allow_standby_replay: "{{ not r.volume.allowStandbyReplay }}"
+      check_mode: true
+      diff: true
+      register: u
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that:
+          - u is changed
+          - u.diff.after.allow_standby_replay != u.diff.before.allow_standby_replay
+
+    - name: Update
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        allow_standby_replay: "{{ u.diff.after.allow_standby_replay }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.volume.allowStandbyReplay == u.diff.after.allow_standby_replay]
+
+    - name: Update again
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        allow_standby_replay: "{{ u.diff.after.allow_standby_replay }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        state: absent
+        confirm_delete: true
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up the volume
+      croit.ceph.cephfs_volume:
+        name: "{{ volume_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false
+    - name: Clean up the volume's pools
+      croit.ceph.pool:
+        name: "{{ item }}"
+        state: absent
+        confirm_delete: true
+      loop: "{{ volume_pools | default([]) }}"
+      failed_when: false

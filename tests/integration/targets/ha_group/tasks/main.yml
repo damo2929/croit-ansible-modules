@@ -1,0 +1,86 @@
+---
+# Only runs when croit_test_ha_servers lists lab servers with an interface for a throwaway VIP:
+#   croit_test_ha_servers: [{server: node1, nic: eth0}, {server: node2, nic: eth0}]
+#   croit_test_ha_vip: 10.0.0.250
+- name: HA group integration tests
+  when: croit_test_ha_servers is defined and croit_test_ha_vip is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    group_name: "{{ croit_test_prefix | default('ansible-test') }}-ha"
+    group_spec:
+      name: "{{ group_name }}"
+      service: none
+      vips: ["{{ croit_test_ha_vip }}"]
+      servers: "{{ croit_test_ha_servers }}"
+  block:
+    - name: Create (check mode)
+      croit.ceph.ha_group: "{{ group_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.ha_group: "{{ group_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.ha_group.description == group_name]
+
+    - name: Create again
+      croit.ceph.ha_group: "{{ group_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.ha_group: "{{ group_spec | combine({'failover_time': 5}) }}"
+      check_mode: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Update
+      croit.ceph.ha_group: "{{ group_spec | combine({'failover_time': 5}) }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.ha_group.failoverTime == 5]
+
+    - name: Update again
+      croit.ceph.ha_group: "{{ group_spec | combine({'failover_time': 5}) }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete
+      croit.ceph.ha_group:
+        name: "{{ group_name }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.ha_group:
+        name: "{{ group_name }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+  always:
+    - name: Clean up
+      croit.ceph.ha_group:
+        name: "{{ group_name }}"
+        state: absent
+      failed_when: false

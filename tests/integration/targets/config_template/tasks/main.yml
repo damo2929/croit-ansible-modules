@@ -1,0 +1,63 @@
+---
+# Sequence for croit.ceph.config_template. Templates are rendered onto servers, so this only runs when
+# croit_test_template is defined (the id of a harmless template, e.g. an MOTD), and restores the original.
+- name: Config template integration tests
+  when: croit_test_template is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the original template
+      croit.ceph.api:
+        path: /config-templates
+      register: all_templates
+    - name: Remember it
+      ansible.builtin.set_fact:
+        original: "{{ all_templates.json | selectattr('id', 'equalto', croit_test_template) | first }}"
+
+    - name: Custom (check mode)
+      croit.ceph.config_template:
+        name: "{{ croit_test_template }}"
+        content: "{{ original.currentTemplate }}\n# ansible-test\n"
+      check_mode: true
+      register: r
+    - name: Assert custom (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Custom
+      croit.ceph.config_template:
+        name: "{{ croit_test_template }}"
+        content: "{{ original.currentTemplate }}\n# ansible-test\n"
+        ignore_warnings: true
+      register: r
+    - name: Custom again
+      croit.ceph.config_template:
+        name: "{{ croit_test_template }}"
+        content: "{{ original.currentTemplate }}\n# ansible-test\n"
+      register: r2
+    - name: Assert custom
+      ansible.builtin.assert:
+        that: [r is changed, r2 is not changed]
+
+  always:
+    - name: Restore the original predefined template
+      croit.ceph.config_template:
+        name: "{{ croit_test_template }}"
+        predefined: "{{ original.currentTemplateName }}"
+        ignore_warnings: true
+      when:
+        - original is defined
+        - original.currentTemplateName in (original.availableTemplates | map(attribute='name') | list)
+      failed_when: false
+    - name: Restore the original custom template
+      croit.ceph.config_template:
+        name: "{{ croit_test_template }}"
+        content: "{{ original.currentTemplate }}"
+        ignore_warnings: true
+      when:
+        - original is defined
+        - original.currentTemplateName not in (original.availableTemplates | map(attribute='name') | list)
+      failed_when: false

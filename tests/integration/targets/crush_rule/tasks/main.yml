@@ -1,0 +1,98 @@
+---
+# Standard sequence for croit.ceph.crush_rule; rules cannot be updated, so a differing rule must fail.
+- name: CRUSH rule integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    rule_name: "{{ croit_test_prefix | default('ansible-test') }}-rule"
+  block:
+    - name: Read device classes
+      croit.ceph.crush_info:
+        gather: [classes, rules, ec_profiles]
+      register: info
+    - name: Assert crush_info
+      ansible.builtin.assert:
+        that: [info is not changed, info.classes | length > 0, info.rules | length > 0]
+
+    - name: Set rule spec
+      ansible.builtin.set_fact:
+        rule_spec:
+          name: "{{ rule_name }}"
+          failure_domain: host
+          device_class: "{{ info.classes | first }}"
+
+    - name: Create (check mode)
+      croit.ceph.crush_rule: "{{ rule_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.rule | length == 0]
+
+    - name: Create
+      croit.ceph.crush_rule: "{{ rule_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.rule.name == rule_name, r.layout.failure_domain == 'host']
+
+    - name: Create again
+      croit.ceph.crush_rule: "{{ rule_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.crush_rule: "{{ rule_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Different failure domain must fail
+      croit.ceph.crush_rule: "{{ rule_spec | combine({'failure_domain': 'osd'}) }}"
+      register: r
+      ignore_errors: true
+    - name: Assert differing rule fails
+      ansible.builtin.assert:
+        that: [r is failed, "'cannot be changed in place' in r.msg"]
+
+    - name: Delete (check mode)
+      croit.ceph.crush_rule:
+        name: "{{ rule_name }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.crush_rule:
+        name: "{{ rule_name }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.crush_rule:
+        name: "{{ rule_name }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.crush_rule:
+        name: "{{ rule_name }}"
+        state: absent
+      failed_when: false

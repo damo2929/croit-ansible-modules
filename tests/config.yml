@@ -1,0 +1,4 @@
+---
+# Modules run on the controller against the croit API; EL9 ships Python 3.9.
+modules:
+  python_requires: ">=3.9"

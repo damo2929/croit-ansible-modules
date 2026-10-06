@@ -1,0 +1,75 @@
+---
+# croit fetches the discovery URL before storing a provider, so this target needs a
+# reachable identity provider: set croit_test_oidc_discovery_url (and optionally
+# croit_test_oidc_client_id / croit_test_oidc_client_secret) in integration_config.yml.
+- name: OIDC provider integration tests
+  when: croit_test_oidc_discovery_url is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    oidc_name: "{{ croit_test_prefix | default('ansible-test') }}-oidc"
+    oidc_spec:
+      name: "{{ oidc_name }}"
+      discovery_url: "{{ croit_test_oidc_discovery_url | default('') }}"
+      client_id: "{{ croit_test_oidc_client_id | default('ansible-test') }}"
+      client_secret: "{{ croit_test_oidc_client_secret | default('ansible-test-secret') }}"
+      client_auth: basic
+      default_roles: [viewer]
+    oidc_update: "{{ oidc_spec | combine({'scope': 'openid profile email'}) }}"
+    oidc_gone:
+      name: "{{ oidc_name }}"
+      state: absent
+  block:
+    - name: Create (check mode)
+      croit.ceph.oidc_provider: "{{ oidc_spec }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.oidc_provider: "{{ oidc_spec }}"
+      register: r2
+    - name: Create again
+      croit.ceph.oidc_provider: "{{ oidc_spec }}"
+      register: r3
+    - name: Create again (check mode)
+      croit.ceph.oidc_provider: "{{ oidc_spec }}"
+      check_mode: true
+      register: r4
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed, r4 is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.oidc_provider: "{{ oidc_update }}"
+      check_mode: true
+      register: r
+    - name: Update
+      croit.ceph.oidc_provider: "{{ oidc_update }}"
+      register: r2
+    - name: Update again
+      croit.ceph.oidc_provider: "{{ oidc_update }}"
+      register: r3
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed, r2.oidc_provider.scope == 'openid profile email']
+
+    - name: Delete (check mode)
+      croit.ceph.oidc_provider: "{{ oidc_gone }}"
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.oidc_provider: "{{ oidc_gone }}"
+      register: r2
+    - name: Delete again
+      croit.ceph.oidc_provider: "{{ oidc_gone }}"
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.oidc_provider: "{{ oidc_gone }}"
+      failed_when: false

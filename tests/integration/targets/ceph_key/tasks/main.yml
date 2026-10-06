@@ -1,0 +1,115 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.ceph_key.
+- name: Ceph key integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    key_name: "client.{{ croit_test_prefix | default('ansible-test') }}-key"
+    key_spec:
+      name: "{{ key_name }}"
+      comment: created by ansible-test
+      caps:
+        mon: profile rbd
+        osd: profile rbd pool=ansible-test-none
+    key_update:
+      name: "{{ key_name }}"
+      comment: created by ansible-test
+      caps:
+        mon: profile rbd
+        osd: profile rbd pool=ansible-test-none, profile rbd-read-only pool=ansible-test-ro
+  block:
+    - name: Create (check mode)
+      croit.ceph.ceph_key: "{{ key_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.key | length == 0
+
+    - name: Create
+      croit.ceph.ceph_key: "{{ key_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.key.user == key_name, r.key.key is not defined or r.key.key is none]
+
+    - name: Create again
+      croit.ceph.ceph_key: "{{ key_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.ceph_key: "{{ key_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.ceph_key: "{{ key_update }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.diff.after.caps.osd == key_update.caps.osd
+
+    - name: Update
+      croit.ceph.ceph_key: "{{ key_update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Update again, with the keyring
+      croit.ceph.ceph_key: "{{ key_update | combine({'return_keyring': true}) }}"
+      register: r
+      no_log: true
+    - name: Assert update again is a no-op and returns the keyring
+      ansible.builtin.assert:
+        that: [r is not changed, r.keyring.file_name is string]
+
+    - name: Delete (check mode)
+      croit.ceph.ceph_key:
+        name: "{{ key_name }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.ceph_key:
+        name: "{{ key_name }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.ceph_key:
+        name: "{{ key_name }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.ceph_key:
+        name: "{{ key_name }}"
+        state: absent
+      failed_when: false

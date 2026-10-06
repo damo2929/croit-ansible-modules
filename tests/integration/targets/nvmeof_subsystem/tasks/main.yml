@@ -1,0 +1,57 @@
+---
+# Needs croit_test_nvmeof_gateway (an existing NVMe-oF cluster). Changes only with croit_test_nvmeof_allow_changes=true.
+- name: NVMe-oF subsystem integration tests
+  when: croit_test_nvmeof_gateway is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    sub_nqn: "nqn.2016-06.io.croit:{{ croit_test_prefix | default('ansible-test') }}-sub"
+  block:
+    - name: Create (check mode)
+      croit.ceph.nvmeof_subsystem:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        nqn: "{{ sub_nqn }}"
+        max_namespaces: 8
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Opt-in create / re-run / delete
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      block:
+        - name: Create
+          croit.ceph.nvmeof_subsystem:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ sub_nqn }}"
+            max_namespaces: 8
+          register: r
+        - name: Create again
+          croit.ceph.nvmeof_subsystem:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ sub_nqn }}"
+            max_namespaces: 8
+          register: r2
+        - name: Delete
+          croit.ceph.nvmeof_subsystem:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ sub_nqn }}"
+            state: absent
+            confirm_delete: true
+          register: r3
+        - name: Assert sequence
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed, r3 is changed]
+  always:
+    - name: Clean up
+      croit.ceph.nvmeof_subsystem:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        nqn: "{{ sub_nqn }}"
+        state: absent
+        confirm_delete: true
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      failed_when: false

@@ -1,0 +1,4 @@
+---
+release_summary: >-
+  Initial release of the croit.ceph collection: shared croit API client (API token auth, background
+  task waiting, ignorable warning handling), cluster and task modules, and modules for pools, RBD, Ceph keys, snapshot schedules, CephFS, S3, Ceph/croit configuration, users and tokens, networks, hooks, backups, CRUSH, mgr modules, OSD flags, servers, disks, OSDs, services, HA groups, OS images, IPMI, RBD mirroring, and the RGW/S3 multisite, NFS, cephfs-guard, SMB, iSCSI and NVMe-oF gateways.

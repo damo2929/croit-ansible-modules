@@ -1,0 +1,114 @@
+---
+# Standard idempotency sequence for croit.ceph.hook_script. The test script only runs `true`.
+- name: Hook script integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    script_name: "{{ croit_test_prefix | default('ansible-test') }}-hook.sh"
+    hook_spec:
+      name: "{{ script_name }}"
+      content: "#!/bin/sh\ntrue\n"
+      hooks:
+        - event: OnHealthImprove
+    hook_update:
+      name: "{{ script_name }}"
+      content: "#!/bin/sh\nexit 0\n"
+      hooks:
+        - event: OnHealthImprove
+        - event: OnHealthRecover
+    hook_update_reordered:
+      name: "{{ script_name }}"
+      content: "#!/bin/sh\nexit 0\n"
+      hooks:
+        - event: OnHealthRecover
+        - event: OnHealthImprove
+  block:
+    - name: Create (check mode)
+      croit.ceph.hook_script: "{{ hook_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.script | length == 0]
+
+    - name: Create
+      croit.ceph.hook_script: "{{ hook_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.script.name == script_name]
+
+    - name: Create again
+      croit.ceph.hook_script: "{{ hook_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.hook_script: "{{ hook_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.hook_script: "{{ hook_update }}"
+      check_mode: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Update
+      croit.ceph.hook_script: "{{ hook_update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.script.hooks | length == 2]
+
+    - name: Update again, hooks in another order
+      croit.ceph.hook_script: "{{ hook_update_reordered }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.hook_script:
+        name: "{{ script_name }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.hook_script:
+        name: "{{ script_name }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.hook_script:
+        name: "{{ script_name }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.hook_script:
+        name: "{{ script_name }}"
+        state: absent
+      failed_when: false

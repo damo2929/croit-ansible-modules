@@ -1,0 +1,33 @@
+---
+name: Release
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: galaxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install ansible-core galaxy-importer
+      - name: Check tag matches galaxy.yml version
+        run: |
+          version=$(python -c "import yaml;print(yaml.safe_load(open('galaxy.yml'))['version'])")
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != galaxy.yml ${version}"; exit 1; }
+      - name: Build
+        run: ansible-galaxy collection build
+      - name: galaxy-importer
+        env:
+          GALAXY_IMPORTER_CONFIG: ${{ github.workspace }}/.github/galaxy-importer.cfg
+        run: python -m galaxy_importer.main croit-ceph-*.tar.gz
+      - name: Publish to Ansible Galaxy
+        run: ansible-galaxy collection publish croit-ceph-*.tar.gz --api-key "${{ secrets.GALAXY_API_KEY }}"
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: croit-ceph-*.tar.gz

@@ -1,0 +1,107 @@
+---
+# Opt-in: needs an existing gateway and croit_test_iscsi_writes=true. Creates a throwaway initiator and a
+# small new image in croit_test_iscsi_pool, and deletes both afterwards.
+- name: Test iSCSI client integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_iscsi_writes | default(false) | bool
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    client_spec:
+      iqn: "iqn.2026-10.io.croit:{{ prefix }}-client"
+      chap_username: "{{ prefix }}-user"
+      chap_password: AnsibleTest01
+      disks:
+        - pool: "{{ croit_test_iscsi_pool | default('iscsi') }}"
+          image: "{{ prefix }}-client-disk"
+          size: 64M
+  block:
+    - name: Create (check mode)
+      croit.ceph.iscsi_client: "{{ client_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.client | length == 0
+
+    - name: Create
+      croit.ceph.iscsi_client: "{{ client_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.client.luns | length == 1
+          - r.client.password == '********'
+
+    - name: Create again
+      croit.ceph.iscsi_client: "{{ client_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+
+    - name: Change the CHAP username (check mode)
+      croit.ceph.iscsi_client: "{{ client_spec | combine({'chap_username': prefix ~ '-user2'}) }}"
+      check_mode: true
+      register: r
+    - name: Assert change (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+
+    - name: Change the CHAP username
+      croit.ceph.iscsi_client: "{{ client_spec | combine({'chap_username': prefix ~ '-user2'}) }}"
+      register: r
+    - name: Change the CHAP username again
+      croit.ceph.iscsi_client: "{{ client_spec | combine({'chap_username': prefix ~ '-user2'}) }}"
+      register: r2
+    - name: Assert change
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is not changed
+
+    - name: Delete (check mode)
+      croit.ceph.iscsi_client:
+        iqn: "{{ client_spec.iqn }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.iscsi_client:
+        iqn: "{{ client_spec.iqn }}"
+        state: absent
+      register: r2
+    - name: Delete again
+      croit.ceph.iscsi_client:
+        iqn: "{{ client_spec.iqn }}"
+        state: absent
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - r3 is not changed
+
+  always:
+    - name: Remove the test initiator
+      croit.ceph.iscsi_client:
+        iqn: "iqn.2026-10.io.croit:{{ prefix }}-client"
+        state: absent
+      failed_when: false
+    - name: Unexport and delete the test image
+      croit.ceph.iscsi_disk:
+        pool: "{{ croit_test_iscsi_pool | default('iscsi') }}"
+        image: "{{ prefix }}-client-disk"
+        state: absent
+        delete_image: true
+        confirm_delete: true
+      failed_when: false

@@ -1,0 +1,12 @@
+---
+profile: production
+exclude_paths:
+  - .github/
+  - changelogs/
+  - docs/
+  - tests/output/
+  - tests/unit/
+skip_list:
+  # EL9 AppStream ships ansible-core 2.14, which upstream no longer lists as
+  # supported. Supporting it is a deliberate project decision (DESIGN.md).
+  - meta-runtime[unsupported-version]

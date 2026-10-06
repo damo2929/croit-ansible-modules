@@ -1,0 +1,27 @@
+---
+- name: Ceph key info integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: List keys (check mode)
+      croit.ceph.ceph_key_info:
+      check_mode: true
+      register: r
+    - name: Assert list
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r.ceph_keys is sequence
+
+    - name: Look up client.admin
+      croit.ceph.ceph_key_info:
+        name: client.admin
+      register: r
+    - name: Assert lookup without secret
+      ansible.builtin.assert:
+        that:
+          - r.ceph_keys | length == 1
+          - r.ceph_keys[0].key is not defined

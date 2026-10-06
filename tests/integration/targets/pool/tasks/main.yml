@@ -1,0 +1,129 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.pool.
+- name: Pool integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    pool_name: "{{ croit_test_prefix | default('ansible-test') }}-pool"
+    pool_spec:
+      name: "{{ pool_name }}"
+      application: rbd
+      size: 3
+      min_size: 2
+      pg_num: 8
+      description: created by ansible-test
+  block:
+    - name: Create (check mode)
+      croit.ceph.pool: "{{ pool_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.pool | length == 0
+
+    - name: Create
+      croit.ceph.pool: "{{ pool_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.pool.name == pool_name, r.pool.size == 3]
+
+    - name: Create again
+      croit.ceph.pool: "{{ pool_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.pool: "{{ pool_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.pool: "{{ pool_spec | combine({'description': 'updated by ansible-test', 'quota_max_bytes': '1G'}) }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Read pool after update (check mode)
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+      register: unchanged
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.diff.before.quota_max_bytes == 0
+          - r.diff.after.quota_max_bytes == 1073741824
+          - unchanged.pool.quotaMaxBytes == 0
+
+    - name: Update
+      croit.ceph.pool: "{{ pool_spec | combine({'description': 'updated by ansible-test', 'quota_max_bytes': '1G'}) }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.pool.description == 'updated by ansible-test', r.pool.quotaMaxBytes == 1073741824]
+
+    - name: Update again
+      croit.ceph.pool: "{{ pool_spec | combine({'description': 'updated by ansible-test', 'quota_max_bytes': '1G'}) }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete without confirmation
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+      register: r
+      ignore_errors: true
+    - name: Assert delete without confirmation fails
+      ansible.builtin.assert:
+        that: [r is failed]
+
+    - name: Delete (check mode)
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

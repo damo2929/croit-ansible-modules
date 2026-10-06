@@ -1,0 +1,92 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.rbd_snapshot.
+- name: RBD snapshot integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    pool_name: "{{ prefix }}-snap"
+    snap:
+      pool: "{{ pool_name }}"
+      image: "{{ prefix }}-image"
+      name: s1
+    snap_protected: "{{ snap | combine({'protected': true}) }}"
+    snap_gone: "{{ snap | combine({'state': 'absent', 'confirm_delete': true}) }}"
+  block:
+    - name: Pool for the tests
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        application: rbd
+        pg_num: 8
+    - name: Image for the tests
+      croit.ceph.rbd:
+        pool: "{{ pool_name }}"
+        name: "{{ prefix }}-image"
+        size: 64M
+
+    - name: Create (check mode)
+      croit.ceph.rbd_snapshot: "{{ snap }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.rbd_snapshot: "{{ snap }}"
+      register: r2
+    - name: Create again
+      croit.ceph.rbd_snapshot: "{{ snap }}"
+      register: r3
+    - name: Create again (check mode)
+      croit.ceph.rbd_snapshot: "{{ snap }}"
+      check_mode: true
+      register: r4
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed, r4 is not changed]
+
+    - name: Protect (check mode)
+      croit.ceph.rbd_snapshot: "{{ snap_protected }}"
+      check_mode: true
+      register: r
+    - name: Protect
+      croit.ceph.rbd_snapshot: "{{ snap_protected }}"
+      register: r2
+    - name: Protect again
+      croit.ceph.rbd_snapshot: "{{ snap_protected }}"
+      register: r3
+    - name: Assert protect
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r2.snapshot.protect, r3 is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.rbd_snapshot: "{{ snap_gone }}"
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.rbd_snapshot: "{{ snap_gone }}"
+      register: r2
+    - name: Delete again
+      croit.ceph.rbd_snapshot: "{{ snap_gone }}"
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Clean up snapshot
+      croit.ceph.rbd_snapshot: "{{ snap_gone }}"
+      failed_when: false
+    - name: Clean up image
+      croit.ceph.rbd:
+        pool: "{{ pool_name }}"
+        name: "{{ prefix }}-image"
+        state: absent
+        confirm_delete: true
+      failed_when: false
+    - name: Clean up pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

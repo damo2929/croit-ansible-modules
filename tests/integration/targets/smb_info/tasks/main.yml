@@ -1,0 +1,27 @@
+---
+# Read-only: lists every SMB cluster. Runs against any lab cluster.
+- name: SMB info integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: List SMB clusters with servers and shares (check mode)
+      croit.ceph.smb_info:
+      check_mode: true
+      register: r
+    - name: Assert SMB info
+      ansible.builtin.assert:
+        that: [r is not changed, r.clusters is sequence]
+
+    - name: Everything about the test cluster
+      croit.ceph.smb_info:
+        cluster: "{{ croit_test_smb_cluster }}"
+        gather: [servers, shares, details, users, groups]
+      register: one
+      when: croit_test_smb_cluster is defined
+    - name: Assert one cluster
+      ansible.builtin.assert:
+        that: [one.clusters | length == 1]
+      when: croit_test_smb_cluster is defined

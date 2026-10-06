@@ -1,0 +1,131 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.s3_bucket.
+- name: S3 bucket integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    owner: "{{ croit_test_prefix | default('ansible-test') }}-s3bucket"
+    bucket: "{{ croit_test_prefix | default('ansible-test') }}-bucket"
+    spec:
+      name: "{{ bucket }}"
+      owner: "{{ owner }}"
+      versioning: enabled
+    update:
+      name: "{{ bucket }}"
+      owner: "{{ owner }}"
+      versioning: suspended
+      quota:
+        enabled: true
+        max_size: 1G
+      policy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: ["arn:aws:iam:::user/{{ owner }}"]}
+            Action: ["s3:GetObject"]
+            Resource: ["arn:aws:s3:::{{ bucket }}/*"]
+  block:
+    - name: Owning user
+      croit.ceph.s3_user:
+        uid: "{{ owner }}"
+        display_name: ansible-test bucket owner
+
+    - name: Create (check mode)
+      croit.ceph.s3_bucket: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.bucket | length == 0]
+
+    - name: Create
+      croit.ceph.s3_bucket: "{{ spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.bucket.bucket == bucket, r.bucket.versioning == 'ENABLED']
+
+    - name: Create again
+      croit.ceph.s3_bucket: "{{ spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.s3_bucket: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.s3_bucket: "{{ update }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.diff.before.versioning == 'ENABLED', r.diff.after.versioning == 'SUSPENDED']
+
+    - name: Update
+      croit.ceph.s3_bucket: "{{ update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.bucket.versioning == 'SUSPENDED', r.bucket.policy is mapping]
+
+    - name: Update again
+      croit.ceph.s3_bucket: "{{ update }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Read with s3_bucket_info
+      croit.ceph.s3_bucket_info:
+        names: ["{{ bucket }}"]
+        include_details: true
+        include_policy: true
+      register: info
+    - name: Assert info
+      ansible.builtin.assert:
+        that:
+          - info.buckets | length == 1
+          - info.buckets[0].policy is mapping
+
+    - name: Delete (check mode)
+      croit.ceph.s3_bucket: {name: "{{ bucket }}", state: absent, confirm_delete: true}
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.s3_bucket: {name: "{{ bucket }}", state: absent, confirm_delete: true}
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.s3_bucket: {name: "{{ bucket }}", state: absent, confirm_delete: true}
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up bucket
+      croit.ceph.s3_bucket: {name: "{{ bucket }}", state: absent, confirm_delete: true, purge_objects: true}
+      failed_when: false
+    - name: Clean up user
+      croit.ceph.s3_user:
+        uid: "{{ owner }}"
+        state: absent
+      failed_when: false

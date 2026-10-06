@@ -1,0 +1,132 @@
+---
+# Read-only by default. Set croit_test_nfs_servers (two or more lab servers) to create and delete a
+# throwaway croit-nfs cluster; it serves no exports, so no client is affected.
+- name: NFS cluster integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    nfs_name: "{{ croit_test_prefix | default('ansible-test') }}-nfs"
+    nfs_spec:
+      name: "{{ nfs_name }}"
+      implementation: croit_nfs
+      servers: "{{ croit_test_nfs_servers | default([]) }}"
+  block:
+    - name: Read NFS clusters
+      croit.ceph.nfs_info:
+        ha: true
+      register: info
+    - name: Assert info
+      ansible.builtin.assert:
+        that: [info is not changed, info.clusters is sequence]
+
+    - name: Refuse to touch an existing cluster with the test name
+      ansible.builtin.assert:
+        that: nfs_name not in (info.clusters | map(attribute='name') | list)
+        fail_msg: "NFS cluster {{ nfs_name }} already exists; remove it or change croit_test_prefix"
+
+    - name: Opt-in create/update/delete sequence
+      when: croit_test_nfs_servers is defined
+      block:
+        - name: Create (check mode)
+          croit.ceph.nfs_cluster: "{{ nfs_spec }}"
+          check_mode: true
+          register: r
+        - name: Assert create (check mode)
+          ansible.builtin.assert:
+            that: [r is changed, r.cluster | length == 0]
+
+        - name: Create
+          croit.ceph.nfs_cluster: "{{ nfs_spec }}"
+          register: r
+        - name: Assert create
+          ansible.builtin.assert:
+            that: [r is changed, r.cluster.implementation == 'croit_nfs']
+
+        - name: Create again
+          croit.ceph.nfs_cluster: "{{ nfs_spec }}"
+          register: r
+        - name: Assert create again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Create again (check mode)
+          croit.ceph.nfs_cluster: "{{ nfs_spec }}"
+          check_mode: true
+          register: r
+        - name: Assert create again (check mode) is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Shrink to the first server (check mode)
+          croit.ceph.nfs_cluster: "{{ nfs_spec | combine({'servers': croit_test_nfs_servers[:1]}) }}"
+          check_mode: true
+          register: r
+        - name: Assert shrink (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Shrink to the first server
+          croit.ceph.nfs_cluster: "{{ nfs_spec | combine({'servers': croit_test_nfs_servers[:1]}) }}"
+          register: r
+        - name: Assert shrink
+          ansible.builtin.assert:
+            that: [r is changed, r.cluster.servers | length == 1]
+
+        - name: Shrink again
+          croit.ceph.nfs_cluster: "{{ nfs_spec | combine({'servers': croit_test_nfs_servers[:1]}) }}"
+          register: r
+        - name: Assert shrink again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Delete without confirmation
+          croit.ceph.nfs_cluster:
+            name: "{{ nfs_name }}"
+            state: absent
+          register: r
+          ignore_errors: true
+        - name: Assert delete without confirmation fails
+          ansible.builtin.assert:
+            that: [r is failed]
+
+        - name: Delete (check mode)
+          croit.ceph.nfs_cluster:
+            name: "{{ nfs_name }}"
+            state: absent
+            confirm_delete: true
+          check_mode: true
+          register: r
+        - name: Assert delete (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Delete
+          croit.ceph.nfs_cluster:
+            name: "{{ nfs_name }}"
+            state: absent
+            confirm_delete: true
+          register: r
+        - name: Assert delete
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Delete again
+          croit.ceph.nfs_cluster:
+            name: "{{ nfs_name }}"
+            state: absent
+            confirm_delete: true
+          register: r
+        - name: Assert delete again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+      always:
+        - name: Clean up
+          croit.ceph.nfs_cluster:
+            name: "{{ nfs_name }}"
+            state: absent
+            confirm_delete: true
+          failed_when: false

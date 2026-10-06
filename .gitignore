@@ -1,0 +1,9 @@
+*.tar.gz
+__pycache__/
+*.pyc
+.venv/
+tests/output/
+tests/integration/integration_config.yml
+changelogs/.plugin-cache.yaml
+.pytest_cache/
+.ansible/

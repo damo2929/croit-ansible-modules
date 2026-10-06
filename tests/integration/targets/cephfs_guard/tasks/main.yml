@@ -1,0 +1,143 @@
+---
+# Read-only by default. Set croit_test_guard_servers (list of {server, nic}) to enable cephfs-guard on
+# croit_test_cephfs_volume, run the sequence (including a webhook), and disable it again.
+# The target refuses to run when that volume is already guarded, so an existing setup is never touched.
+- name: Cephfs-guard integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    guard_volume: "{{ croit_test_cephfs_volume | default('cephfs') }}"
+    guard_spec:
+      volume: "{{ guard_volume }}"
+      servers: "{{ croit_test_guard_servers | default([]) }}"
+      actions:
+        snapshot: false
+        yara_scan: false
+        block: false
+    hook_spec:
+      volume: "{{ guard_volume }}"
+      url: https://192.0.2.10/ansible-test-hook
+  block:
+    - name: Read cephfs-guard configs
+      croit.ceph.cephfs_guard_info:
+        webhooks: true
+      register: info
+    - name: Assert info
+      ansible.builtin.assert:
+        that: [info is not changed, info.configs is sequence]
+
+    - name: Opt-in sequence
+      when: croit_test_guard_servers is defined
+      block:
+        - name: Refuse to touch an already guarded volume
+          ansible.builtin.assert:
+            that: guard_volume not in (info.configs | map(attribute='volume') | list)
+            fail_msg: "cephfs-guard is already enabled for {{ guard_volume }}; not touching it"
+
+        - name: Enable (check mode)
+          croit.ceph.cephfs_guard: "{{ guard_spec }}"
+          check_mode: true
+          register: r
+        - name: Assert enable (check mode)
+          ansible.builtin.assert:
+            that: [r is changed, r.config | length == 0]
+
+        - name: Enable
+          croit.ceph.cephfs_guard: "{{ guard_spec }}"
+          register: r
+        - name: Assert enable
+          ansible.builtin.assert:
+            that: [r is changed, r.config.volume == guard_volume]
+
+        - name: Enable again
+          croit.ceph.cephfs_guard: "{{ guard_spec }}"
+          register: r
+        - name: Assert enable again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Enable again (check mode)
+          croit.ceph.cephfs_guard: "{{ guard_spec }}"
+          check_mode: true
+          register: r
+        - name: Assert enable again (check mode) is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Raise the threshold (check mode)
+          croit.ceph.cephfs_guard: "{{ guard_spec | combine({'detection': {'action_threshold': 0.9}}) }}"
+          check_mode: true
+          register: r
+        - name: Assert update (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Raise the threshold
+          croit.ceph.cephfs_guard: "{{ guard_spec | combine({'detection': {'action_threshold': 0.9}}) }}"
+          register: r
+        - name: Assert update
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Raise the threshold again
+          croit.ceph.cephfs_guard: "{{ guard_spec | combine({'detection': {'action_threshold': 0.9}}) }}"
+          register: r
+        - name: Assert update again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Add a webhook
+          croit.ceph.cephfs_guard_webhook: "{{ hook_spec }}"
+          register: r
+        - name: Add the webhook again
+          croit.ceph.cephfs_guard_webhook: "{{ hook_spec }}"
+          register: r2
+        - name: Assert webhook idempotency
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed]
+
+        - name: Remove the webhook
+          croit.ceph.cephfs_guard_webhook: "{{ hook_spec | combine({'state': 'absent'}) }}"
+          register: r
+        - name: Assert webhook removed
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Disable (check mode)
+          croit.ceph.cephfs_guard:
+            volume: "{{ guard_volume }}"
+            state: absent
+          check_mode: true
+          register: r
+        - name: Assert disable (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Disable
+          croit.ceph.cephfs_guard:
+            volume: "{{ guard_volume }}"
+            state: absent
+          register: r
+        - name: Assert disable
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Disable again
+          croit.ceph.cephfs_guard:
+            volume: "{{ guard_volume }}"
+            state: absent
+          register: r
+        - name: Assert disable again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+      always:
+        - name: Disable cephfs-guard again (only if this run enabled it)
+          croit.ceph.cephfs_guard:
+            volume: "{{ guard_volume }}"
+            state: absent
+          when: guard_volume not in (info.configs | map(attribute='volume') | list)
+          failed_when: false

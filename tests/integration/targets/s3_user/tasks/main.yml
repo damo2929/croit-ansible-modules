@@ -1,0 +1,122 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.s3_user.
+- name: S3 user integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    uid: "{{ croit_test_prefix | default('ansible-test') }}-s3user"
+    spec:
+      uid: "{{ uid }}"
+      display_name: ansible-test user
+      user_quota:
+        enabled: true
+        max_size: 1G
+    update:
+      uid: "{{ uid }}"
+      display_name: ansible-test user
+      email: ansible-test@example.invalid
+      bucket_quota:
+        enabled: true
+        max_objects: 1000
+  block:
+    - name: Create (check mode)
+      croit.ceph.s3_user: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.user | length == 0]
+
+    - name: Create
+      croit.ceph.s3_user: "{{ spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.user.uid == uid, r.user.userQuota.maxSize == 1073741824]
+
+    - name: Create again
+      croit.ceph.s3_user: "{{ spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.s3_user: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.s3_user: "{{ update }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.diff.after.email == 'ansible-test@example.invalid', r.user.email == '']
+
+    - name: Update
+      croit.ceph.s3_user: "{{ update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.user.email == 'ansible-test@example.invalid', r.user.bucketQuota.maxObjects == 1000]
+
+    - name: Update again
+      croit.ceph.s3_user: "{{ update }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Read with s3_user_info
+      croit.ceph.s3_user_info:
+        uids: ["{{ uid }}"]
+        include_buckets: true
+      register: info
+    - name: Assert info
+      ansible.builtin.assert:
+        that:
+          - info.users | length == 1
+          - info.users[0].buckets | length == 0
+
+    - name: Delete (check mode)
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      failed_when: false

@@ -1,0 +1,128 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.rbd.
+- name: RBD image integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    pool_name: "{{ prefix }}-rbd"
+    image_spec:
+      pool: "{{ pool_name }}"
+      name: "{{ prefix }}-image"
+      size: 1G
+    image_update:
+      pool: "{{ pool_name }}"
+      name: "{{ prefix }}-image"
+      size: 2G
+      qos:
+        rbd_qos_iops_limit: 500
+    image_gone:
+      pool: "{{ pool_name }}"
+      name: "{{ prefix }}-image"
+      state: absent
+      confirm_delete: true
+  block:
+    - name: Pool for the tests
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        application: rbd
+        pg_num: 8
+
+    - name: Create (check mode)
+      croit.ceph.rbd: "{{ image_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.image | length == 0
+
+    - name: Create
+      croit.ceph.rbd: "{{ image_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.image.size == 1073741824]
+
+    - name: Create again
+      croit.ceph.rbd: "{{ image_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.rbd: "{{ image_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.rbd: "{{ image_update }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.diff.after.size == 2147483648, r.image.size == 1073741824]
+
+    - name: Update
+      croit.ceph.rbd: "{{ image_update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.image.size == 2147483648]
+
+    - name: Update again
+      croit.ceph.rbd: "{{ image_update }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Shrink is refused
+      croit.ceph.rbd: "{{ image_spec }}"
+      register: r
+      ignore_errors: true
+    - name: Assert shrink fails
+      ansible.builtin.assert:
+        that: [r is failed]
+
+    - name: Delete (check mode)
+      croit.ceph.rbd: "{{ image_gone }}"
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.rbd: "{{ image_gone }}"
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.rbd: "{{ image_gone }}"
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up image
+      croit.ceph.rbd: "{{ image_gone }}"
+      failed_when: false
+    - name: Clean up pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

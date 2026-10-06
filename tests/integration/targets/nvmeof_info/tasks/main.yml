@@ -1,0 +1,23 @@
+---
+- name: NVMe-oF info integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read everything (check mode)
+      croit.ceph.nvmeof_info:
+      check_mode: true
+      register: r
+    - name: Assert info
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r.gateways is sequence
+          - r.ceph_clusters is sequence
+          - visible_keys | length == 0
+      vars:
+        visible_keys: >-
+          {{ r.hosts | selectattr('sharedKey', 'defined') | rejectattr('sharedKey', 'none')
+             | map(attribute='sharedKey') | reject('equalto', '********') | list }}

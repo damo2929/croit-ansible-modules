@@ -1,0 +1,77 @@
+---
+# Read-only by default. Stopping/starting a service is opt-in:
+#   croit_test_service_server / croit_test_service_type: a NON-CRITICAL service (e.g. rbd_mirror),
+#   which is stopped and started again; its running state is restored in always.
+- name: Service integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: List monitors
+      croit.ceph.service_info:
+        type: mon
+      register: mons
+    - name: Assert monitors listed
+      ansible.builtin.assert:
+        that: [mons is not changed, mons.services | length > 0]
+
+    - name: Removing a monitor without confirmation fails
+      croit.ceph.service:
+        service_id: "{{ mons.services[0].id }}"
+        state: absent
+      check_mode: true
+      register: r
+      ignore_errors: true
+    - name: Assert refusal
+      ansible.builtin.assert:
+        that: [r is failed, "'confirm_delete' in r.msg"]
+
+    - name: Stop/start round trip
+      when: croit_test_service_server is defined and croit_test_service_type is defined
+      block:
+        - name: Read service
+          croit.ceph.service_info:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+          register: svc
+        - name: Stop (check mode)
+          croit.ceph.service:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+            state: stopped
+          check_mode: true
+          register: c
+        - name: Stop
+          croit.ceph.service:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+            state: stopped
+          register: stop
+        - name: Stop again
+          croit.ceph.service:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+            state: stopped
+          register: stop2
+        - name: Start
+          croit.ceph.service:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+            state: started
+          register: start
+        - name: Assert round trip
+          ansible.builtin.assert:
+            that:
+              - c is changed or not svc.services[0].running
+              - not stop.service.running
+              - stop2 is not changed
+              - start.service.running
+      always:
+        - name: Restore running state
+          croit.ceph.service:
+            server: "{{ croit_test_service_server }}"
+            type: "{{ croit_test_service_type }}"
+            state: "{{ 'started' if (svc.services[0].running | default(true)) else 'stopped' }}"
+          when: croit_test_service_server is defined and croit_test_service_type is defined

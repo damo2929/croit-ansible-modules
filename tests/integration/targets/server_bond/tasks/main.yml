@@ -1,0 +1,34 @@
+---
+# Check mode only: a real bond would reconfigure the lab server's network.
+# Set croit_test_bond_members to two unused interfaces of croit_test_server to run it.
+- name: Server bond integration tests (check mode only)
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_bond_members is defined
+  block:
+    - name: Create a bond (check mode)
+      croit.ceph.server_bond:
+        server: "{{ croit_test_server }}"
+        name: "{{ croit_test_prefix | default('ansible-test') | regex_replace('[^a-z0-9]', '') | truncate(8, true, '') }}b0"
+        members: "{{ croit_test_bond_members }}"
+      check_mode: true
+      register: r
+    - name: Assert create a bond (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.bond | length == 0
+
+    - name: Delete a bond that does not exist
+      croit.ceph.server_bond:
+        server: "{{ croit_test_server }}"
+        name: no-such-bond
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]

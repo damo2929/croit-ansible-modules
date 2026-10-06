@@ -1,0 +1,29 @@
+---
+# Read-only: multisite role changes are one-way, so they are never run against the lab cluster.
+- name: S3 multisite integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the multisite status
+      croit.ceph.s3_multisite:
+      register: r
+    - name: Assert status
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r.multisite.enabled is boolean
+
+    - name: Converting without confirm_action fails (check mode)
+      croit.ceph.s3_multisite:
+        role: primary
+        endpoints: [http://192.0.2.1:80]
+        sync_user: ansible-test-sync
+      check_mode: true
+      register: r
+      failed_when: false
+    - name: Assert the refusal (or no change on a primary)
+      ansible.builtin.assert:
+        that: (r.failed | default(false) and 'confirm_action' in r.msg) or r is not changed

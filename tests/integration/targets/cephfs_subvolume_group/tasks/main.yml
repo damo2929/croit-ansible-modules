@@ -1,0 +1,132 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.cephfs_subvolume_group.
+# Uses croit_test_cephfs_volume, or croit's own CephFS volume when it is not set.
+- name: CephFS subvolume group integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    group_name: "{{ croit_test_prefix | default('ansible-test') }}-group"
+    volume_name: "{{ croit_test_cephfs_volume | default(omit) }}"
+  block:
+    - name: Create (check mode)
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 1G
+        mode: "750"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 1G
+        mode: "750"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.subvolume_group.quotaMaxBytes == 1073741824]
+
+    - name: Create again
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 1G
+        mode: "750"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 1G
+        mode: "750"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Resize (check mode)
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 2G
+      check_mode: true
+      register: r
+    - name: Assert resize (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.subvolume_group.quotaMaxBytes == 1073741824]
+
+    - name: Resize
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 2G
+      register: r
+    - name: Assert resize
+      ansible.builtin.assert:
+        that: [r is changed, r.subvolume_group.quotaMaxBytes == 2147483648]
+
+    - name: Resize again
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        size: 2G
+      register: r
+    - name: Assert resize again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        state: absent
+        confirm_delete: true
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        state: absent
+        confirm_delete: true
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ volume_name }}"
+        name: "{{ group_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

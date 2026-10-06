@@ -1,0 +1,72 @@
+---
+# Non-destructive checks for croit.ceph.config_backup: the lab cluster's backup settings are only
+# read, and every change is made in check mode. Set croit_test_backup_writes=true to also toggle
+# cloud backups for real and restore the original setting.
+- name: Config backup integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the current settings
+      croit.ceph.config_backup:
+      register: current
+    - name: Assert read
+      ansible.builtin.assert:
+        that:
+          - current is not changed
+          - current.cloud.enabled is boolean
+          - "'backupEncryptionKey' not in current.cloud"
+          - "'secretKey' not in current.s3"
+
+    - name: Keep the current setting
+      croit.ceph.config_backup:
+        cloud_enabled: "{{ current.cloud.enabled }}"
+      register: r
+    - name: Assert keeping is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Toggle (check mode)
+      croit.ceph.config_backup:
+        cloud_enabled: "{{ not current.cloud.enabled }}"
+      check_mode: true
+      register: r
+    - name: Read after toggle (check mode)
+      croit.ceph.config_backup:
+      register: after_check
+    - name: Assert toggle (check mode) did not write
+      ansible.builtin.assert:
+        that: [r is changed, after_check.cloud.enabled == current.cloud.enabled]
+
+    - name: Backup now (check mode)
+      croit.ceph.config_backup:
+        run_now: [cloud]
+      check_mode: true
+      register: r
+    - name: Assert backup now (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.tasks is not defined]
+
+    - name: Real toggle and restore
+      when: croit_test_backup_writes | default(false) | bool
+      block:
+        - name: Toggle
+          croit.ceph.config_backup:
+            cloud_enabled: "{{ not current.cloud.enabled }}"
+          register: r
+        - name: Toggle again
+          croit.ceph.config_backup:
+            cloud_enabled: "{{ not current.cloud.enabled }}"
+          register: r2
+        - name: Assert toggle
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed]
+
+  always:
+    - name: Restore the original cloud backup setting
+      croit.ceph.config_backup:
+        cloud_enabled: "{{ current.cloud.enabled }}"
+      when: current.cloud is defined
+      failed_when: false

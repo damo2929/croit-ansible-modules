@@ -1,0 +1,96 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.s3_subuser.
+- name: S3 subuser integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    uid: "{{ croit_test_prefix | default('ansible-test') }}-s3sub"
+  block:
+    - name: Owning user
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        display_name: ansible-test subuser owner
+
+    - name: Create (check mode)
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read}
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read}
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.subuser.permissions == 'read']
+
+    - name: Create again
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read}
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read}
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read-write}
+      check_mode: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.subuser.permissions == 'read']
+
+    - name: Update
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read-write}
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.subuser.permissions == 'read-write']
+
+    - name: Update again
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, permissions: read-write}
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, state: absent}
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, state: absent}
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.s3_subuser: {uid: "{{ uid }}", subuser: mon, state: absent}
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      failed_when: false

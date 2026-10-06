@@ -1,0 +1,105 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.s3_user_key.
+- name: S3 user key integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    uid: "{{ croit_test_prefix | default('ansible-test') }}-s3key"
+    access_key: "{{ (croit_test_prefix | default('ansible-test') | upper | replace('-', '')) }}AK01"
+    secret1: "{{ lookup('ansible.builtin.password', '/dev/null', length=40, chars=['ascii_letters', 'digits']) }}"
+    secret2: "{{ lookup('ansible.builtin.password', '/dev/null', length=40, chars=['ascii_letters', 'digits']) }}"
+  block:
+    - name: Fix the generated secrets for this run
+      ansible.builtin.set_fact:
+        s1: "{{ secret1 }}"
+        s2: "{{ secret2 }}"
+      no_log: true
+
+    - name: Owning user
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        display_name: ansible-test key owner
+
+    - name: Create (check mode)
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s1 }}"}
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.key | length == 0]
+
+    - name: Create
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s1 }}"}
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.key.access_key == access_key, s1 not in (r | to_json)]
+
+    - name: Create again
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s1 }}"}
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s1 }}"}
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Rotate secret (check mode)
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s2 }}"}
+      check_mode: true
+      register: r
+    - name: Assert rotate (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Rotate secret
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s2 }}"}
+      register: r
+    - name: Assert rotate
+      ansible.builtin.assert:
+        that: [r is changed, s2 not in (r | to_json)]
+
+    - name: Rotate again
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", secret_key: "{{ s2 }}"}
+      register: r
+    - name: Assert rotate again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", state: absent}
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", state: absent}
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.s3_user_key: {uid: "{{ uid }}", access_key: "{{ access_key }}", state: absent}
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.s3_user:
+        uid: "{{ uid }}"
+        state: absent
+      failed_when: false

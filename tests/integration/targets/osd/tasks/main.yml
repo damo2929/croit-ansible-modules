@@ -1,0 +1,94 @@
+---
+# Read-only/check-mode by default. Real changes are opt-in:
+#   croit_test_osd_id: <id>                  OSD used for the in/out and stop/start checks
+#   croit_test_osd_allow_changes: true       actually mark it out/in and stop/start it (restored in always)
+#   croit_test_osd_server / croit_test_osd_disk + croit_test_osd_allow_wipe: true
+#                                            create an OSD on that disk (ERASES IT; not undone)
+- name: OSD integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_osd_id is defined
+  block:
+    - name: Converged state is a no-op
+      croit.ceph.osd:
+        osd_id: "{{ croit_test_osd_id }}"
+      register: r
+    - name: Assert no-op
+      ansible.builtin.assert:
+        that: [r is not changed, r.osd.id == croit_test_osd_id | int]
+
+    - name: Mark out (check mode)
+      croit.ceph.osd:
+        osd_id: "{{ croit_test_osd_id }}"
+        in: "{{ not r.osd.in }}"
+      check_mode: true
+      register: c
+    - name: Assert check mode predicted a change and changed nothing
+      ansible.builtin.assert:
+        that: [c is changed, c.osd.in == r.osd.in]
+
+    - name: Real in/out and stop/start round trip
+      when: croit_test_osd_allow_changes | default(false) | bool
+      block:
+        - name: Mark out
+          croit.ceph.osd:
+            osd_id: "{{ croit_test_osd_id }}"
+            in: false
+          register: out
+        - name: Mark out again
+          croit.ceph.osd:
+            osd_id: "{{ croit_test_osd_id }}"
+            in: false
+          register: out2
+        - name: Stop
+          croit.ceph.osd:
+            osd_id: "{{ croit_test_osd_id }}"
+            running: false
+          register: stop
+        - name: Assert round trip
+          ansible.builtin.assert:
+            that: [out is changed, out2 is not changed, not out.osd.in, stop is changed, not stop.osd.running]
+      always:
+        - name: Restore in and running
+          croit.ceph.osd:
+            osd_id: "{{ croit_test_osd_id }}"
+            in: "{{ r.osd.in }}"
+            running: "{{ r.osd.running }}"
+          when: croit_test_osd_allow_changes | default(false) | bool
+
+- name: OSD creation (erases the disk)
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when:
+    - croit_test_osd_allow_wipe | default(false) | bool
+    - croit_test_osd_server is defined
+    - croit_test_osd_disk is defined
+  block:
+    - name: Create (check mode)
+      croit.ceph.osd:
+        server: "{{ croit_test_osd_server }}"
+        disk: "{{ croit_test_osd_disk }}"
+        confirm_wipe: true
+      check_mode: true
+      register: c
+    - name: Create
+      croit.ceph.osd:
+        server: "{{ croit_test_osd_server }}"
+        disk: "{{ croit_test_osd_disk }}"
+        confirm_wipe: true
+      register: created
+    - name: Create again
+      croit.ceph.osd:
+        server: "{{ croit_test_osd_server }}"
+        disk: "{{ croit_test_osd_disk }}"
+        confirm_wipe: true
+      register: again
+    - name: Assert create sequence
+      ansible.builtin.assert:
+        that: [c is changed, created is changed, created.osd.id is number, again is not changed]

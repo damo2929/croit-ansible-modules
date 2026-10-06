@@ -1,0 +1,81 @@
+---
+# Opt-in: needs an existing gateway and croit_test_iscsi_writes=true. Exports a small new image through a
+# throwaway initiator, grows it, then unexports and deletes it.
+- name: Test iSCSI disk integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_iscsi_writes | default(false) | bool
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    pool: "{{ croit_test_iscsi_pool | default('iscsi') }}"
+    image: "{{ prefix }}-disk"
+    client: "iqn.2026-10.io.croit:{{ prefix }}-disk-client"
+  block:
+    - name: Export a new 64 MiB disk through an initiator
+      croit.ceph.iscsi_client:
+        iqn: "{{ client }}"
+        chap_username: "{{ prefix }}-user"
+        chap_password: AnsibleTest01
+        disks: [{pool: "{{ pool }}", image: "{{ image }}", size: 64M}]
+
+    - name: At its size
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", size: 64M}
+      register: r
+    - name: Grow (check mode)
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", size: 128M}
+      check_mode: true
+      register: r2
+    - name: Grow
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", size: 128M}
+      register: r3
+    - name: Grow again
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", size: 128M}
+      register: r4
+    - name: Shrink is refused
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", size: 64M}
+      register: r5
+      ignore_errors: true
+    - name: Assert sizes
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r2 is changed
+          - r3 is changed
+          - r3.disk.size == 134217728
+          - r4 is not changed
+          - r5 is failed
+
+    - name: Delete the image without confirmation is refused
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", state: absent, delete_image: true}
+      register: r
+      ignore_errors: true
+    - name: Unexport and delete (check mode)
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", state: absent, delete_image: true, confirm_delete: true}
+      check_mode: true
+      register: r2
+    - name: Unexport and delete
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", state: absent, delete_image: true, confirm_delete: true}
+      register: r3
+    - name: Unexport and delete again
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", state: absent, delete_image: true, confirm_delete: true}
+      register: r4
+    - name: Assert delete
+      ansible.builtin.assert:
+        that:
+          - r is failed
+          - r2 is changed
+          - r3 is changed
+          - r4 is not changed
+
+  always:
+    - name: Remove the test initiator
+      croit.ceph.iscsi_client:
+        iqn: "{{ client }}"
+        state: absent
+      failed_when: false
+    - name: Unexport and delete the test image
+      croit.ceph.iscsi_disk: {pool: "{{ pool }}", image: "{{ image }}", state: absent, delete_image: true, confirm_delete: true}
+      failed_when: false

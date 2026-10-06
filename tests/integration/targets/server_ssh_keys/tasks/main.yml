@@ -1,0 +1,67 @@
+---
+# Idempotency sequence for croit.ceph.server_ssh_keys. Never uses exclusive=true, so keys
+# already configured on the lab cluster are left alone.
+- name: Server SSH keys integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    # A syntactically valid ed25519 public key nobody holds the private half of.
+    test_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl ansible-test
+    test_key_other_comment: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl renamed
+  block:
+    - name: Add (check mode)
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+      check_mode: true
+      register: r
+    - name: Add
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+      register: r2
+    - name: Add again
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+      register: r3
+    - name: Add again with another comment (check mode)
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key_other_comment }}"]
+      check_mode: true
+      register: r4
+    - name: Assert add
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r2 is changed
+          - test_key in r2.ssh_keys
+          - r3 is not changed
+          - r4 is not changed
+
+    - name: Remove (check mode)
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+        state: absent
+      check_mode: true
+      register: r
+    - name: Remove
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+        state: absent
+      register: r2
+    - name: Remove again
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+        state: absent
+      register: r3
+    - name: Assert remove
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, test_key not in r2.ssh_keys, r3 is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.server_ssh_keys:
+        keys: ["{{ test_key }}"]
+        state: absent
+      failed_when: false

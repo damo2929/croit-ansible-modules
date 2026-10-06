@@ -1,0 +1,52 @@
+---
+# Needs croit_test_nvmeof_gateway. Changes only with croit_test_nvmeof_allow_changes=true.
+- name: NVMe-oF host integration tests
+  when: croit_test_nvmeof_gateway is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    host_nqn: "nqn.2014-08.org.nvmexpress:uuid:{{ croit_test_prefix | default('ansible-test') }}-host"
+  block:
+    - name: Add (check mode)
+      croit.ceph.nvmeof_host:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        nqn: "{{ host_nqn }}"
+      check_mode: true
+      register: r
+    - name: Assert add (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Opt-in add / re-run / revoke
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      block:
+        - name: Add
+          croit.ceph.nvmeof_host:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ host_nqn }}"
+          register: r
+        - name: Add again
+          croit.ceph.nvmeof_host:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ host_nqn }}"
+          register: r2
+        - name: Revoke
+          croit.ceph.nvmeof_host:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            nqn: "{{ host_nqn }}"
+            state: absent
+          register: r3
+        - name: Assert sequence
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed, r3 is changed]
+  always:
+    - name: Clean up
+      croit.ceph.nvmeof_host:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        nqn: "{{ host_nqn }}"
+        state: absent
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      failed_when: false

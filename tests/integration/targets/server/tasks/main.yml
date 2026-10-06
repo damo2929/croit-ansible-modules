@@ -1,0 +1,89 @@
+---
+# Only reversible changes: the lab server's notes are changed and restored.
+- name: Server integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    test_notes: "{{ croit_test_prefix | default('ansible-test') }} notes"
+  block:
+    - name: Read the lab server
+      croit.ceph.server_info:
+        servers: ["{{ croit_test_server }}"]
+      register: before
+
+    - name: Remember its notes
+      ansible.builtin.set_fact:
+        original_notes: "{{ before.servers[0].notes | default('', true) }}"
+
+    - name: Set notes (check mode)
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        notes: "{{ test_notes }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert set notes (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.diff.after.notes == test_notes
+          - (r.server.notes | default('', true)) == original_notes
+
+    - name: Set notes
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        notes: "{{ test_notes }}"
+      register: r
+    - name: Assert set notes
+      ansible.builtin.assert:
+        that: [r is changed, r.server.notes == test_notes]
+
+    - name: Set notes again
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        notes: "{{ test_notes }}"
+      register: r
+    - name: Assert set notes again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Set notes again (check mode)
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        notes: "{{ test_notes }}"
+      check_mode: true
+      register: r
+    - name: Assert set notes again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Reboot without confirmation
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        action: reboot
+      register: r
+      ignore_errors: true
+    - name: Assert reboot without confirmation fails
+      ansible.builtin.assert:
+        that: [r is failed]
+
+    - name: Reboot (check mode never reboots)
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        action: reboot
+        confirm_action: true
+      check_mode: true
+      register: r
+    - name: Assert reboot (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.task is not defined]
+
+  always:
+    - name: Restore notes
+      croit.ceph.server:
+        server: "{{ croit_test_server }}"
+        notes: "{{ original_notes | default('') }}"
+      when: original_notes is defined

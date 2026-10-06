@@ -1,0 +1,109 @@
+---
+# Standard set/unset sequence (DESIGN.md section 4) for croit.ceph.ceph_config and ceph_config_info.
+# Uses mon_data_avail_warn in a test-only mask so it never changes the whole cluster, and restores it.
+- name: Ceph config integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    opt:
+      name: mon_data_avail_warn
+      section: mon
+      mask: host:{{ croit_test_prefix | default('ansible-test') }}-no-such-host
+  block:
+    - name: Read the original state
+      croit.ceph.ceph_config_info:
+        name: "{{ opt.name }}"
+        section: "{{ opt.section }}"
+        available: true
+      register: original
+
+    - name: Set (check mode)
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 25}) }}"
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Set
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 25}) }}"
+      register: r
+    - name: Assert set
+      ansible.builtin.assert:
+        that: [r is changed, r.config.customized]
+
+    - name: Set again
+      croit.ceph.ceph_config: "{{ opt | combine({'value': '25'}) }}"
+      register: r
+    - name: Assert set again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Set again (check mode)
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 25}) }}"
+      check_mode: true
+      register: r
+    - name: Assert set again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Change (check mode)
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 20}) }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert change (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.diff.after.value == 20]
+
+    - name: Change
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 20}) }}"
+      register: r
+    - name: Assert change
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Change again
+      croit.ceph.ceph_config: "{{ opt | combine({'value': 20}) }}"
+      register: r
+    - name: Assert change again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Read it back with ceph_config_info
+      croit.ceph.ceph_config_info:
+        name: "{{ opt.name }}"
+      register: info
+    - name: Assert info lists the masked row
+      ansible.builtin.assert:
+        that: [info.config | selectattr('mask', 'equalto', opt.mask) | list | length == 1]
+
+    - name: Unset (check mode)
+      croit.ceph.ceph_config: "{{ opt | combine({'state': 'absent'}) }}"
+      check_mode: true
+      register: r
+    - name: Assert unset (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Unset
+      croit.ceph.ceph_config: "{{ opt | combine({'state': 'absent'}) }}"
+      register: r
+    - name: Assert unset
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Unset again
+      croit.ceph.ceph_config: "{{ opt | combine({'state': 'absent'}) }}"
+      register: r
+    - name: Assert unset again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Restore (the test row never existed before)
+      croit.ceph.ceph_config: "{{ opt | combine({'state': 'absent'}) }}"
+      failed_when: false

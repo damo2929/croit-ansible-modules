@@ -1,0 +1,83 @@
+---
+# Idempotency sequence for croit.ceph.pool_qos (set / change / clear).
+- name: Pool QoS integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    pool_name: "{{ croit_test_prefix | default('ansible-test') }}-qos"
+    set_limits:
+      pool: "{{ pool_name }}"
+      limits:
+        rbd_qos_iops_limit: 2000
+    change_limits:
+      pool: "{{ pool_name }}"
+      limits:
+        rbd_qos_iops_limit: 3000
+    clear_limits:
+      pool: "{{ pool_name }}"
+      exclusive: true
+  block:
+    - name: Pool for the tests
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        application: rbd
+        pg_num: 8
+
+    - name: Set (check mode)
+      croit.ceph.pool_qos: "{{ set_limits }}"
+      check_mode: true
+      register: r1
+    - name: Set
+      croit.ceph.pool_qos: "{{ set_limits }}"
+      register: r2
+    - name: Set again
+      croit.ceph.pool_qos: "{{ set_limits }}"
+      register: r3
+    - name: Set again (check mode)
+      croit.ceph.pool_qos: "{{ set_limits }}"
+      check_mode: true
+      register: r4
+    - name: Change (check mode)
+      croit.ceph.pool_qos: "{{ change_limits }}"
+      check_mode: true
+      register: r5
+    - name: Change
+      croit.ceph.pool_qos: "{{ change_limits }}"
+      register: r6
+    - name: Change again
+      croit.ceph.pool_qos: "{{ change_limits }}"
+      register: r7
+    - name: Clear (check mode)
+      croit.ceph.pool_qos: "{{ clear_limits }}"
+      check_mode: true
+      register: r8
+    - name: Clear
+      croit.ceph.pool_qos: "{{ clear_limits }}"
+      register: r9
+    - name: Clear again
+      croit.ceph.pool_qos: "{{ clear_limits }}"
+      register: r10
+    - name: Assert the sequence
+      ansible.builtin.assert:
+        that:
+          - r1 is changed
+          - r2 is changed
+          - r3 is not changed
+          - r4 is not changed
+          - r5 is changed
+          - r6 is changed
+          - r7 is not changed
+          - r8 is changed
+          - r9 is changed
+          - r10 is not changed
+
+  always:
+    - name: Clean up pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

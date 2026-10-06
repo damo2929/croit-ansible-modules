@@ -1,0 +1,122 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.snapshot_schedule.
+# Uses an RBD schedule on a pool that need not exist (croit warns, ignore_warnings confirms).
+- name: Snapshot schedule integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+      ignore_warnings: true
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}-snap"
+    spec:
+      type: rbd
+      snapshot_prefix: "{{ prefix }}"
+      cron: "0 3 * * *"
+      max_snapshots: 2
+      enabled: false
+      rbd_paths:
+        - pool: "{{ croit_test_prefix | default('ansible-test') }}-nonexistent"
+    update:
+      type: rbd
+      snapshot_prefix: "{{ prefix }}"
+      cron: "0 4 * * *"
+      max_snapshots: 3
+      enabled: false
+      rbd_paths:
+        - pool: "{{ croit_test_prefix | default('ansible-test') }}-nonexistent"
+  block:
+    - name: Create (check mode)
+      croit.ceph.snapshot_schedule: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.schedule | length == 0
+
+    - name: Create
+      croit.ceph.snapshot_schedule: "{{ spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.schedule.snapshotPrefix == prefix, not r.schedule.enabled]
+
+    - name: Create again
+      croit.ceph.snapshot_schedule: "{{ spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.snapshot_schedule: "{{ spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.snapshot_schedule: "{{ update }}"
+      check_mode: true
+      diff: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.diff.before.max_snapshots == 2, r.diff.after.max_snapshots == 3]
+
+    - name: Update
+      croit.ceph.snapshot_schedule: "{{ update }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.schedule.maxSnapshots == 3, r.schedule.cron == '0 4 * * *']
+
+    - name: Update again
+      croit.ceph.snapshot_schedule: "{{ update }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.snapshot_schedule:
+        type: rbd
+        snapshot_prefix: "{{ prefix }}"
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.snapshot_schedule:
+        type: rbd
+        snapshot_prefix: "{{ prefix }}"
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.snapshot_schedule:
+        type: rbd
+        snapshot_prefix: "{{ prefix }}"
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.snapshot_schedule:
+        type: rbd
+        snapshot_prefix: "{{ prefix }}"
+        state: absent
+      failed_when: false

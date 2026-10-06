@@ -1,0 +1,58 @@
+---
+# Needs croit_test_nvmeof_gateway and croit_test_nvmeof_image ({pool, image}: an existing throwaway RBD image).
+# Changes only with croit_test_nvmeof_allow_changes=true; the image itself is never deleted.
+- name: NVMe-oF disk integration tests
+  when: croit_test_nvmeof_gateway is defined and croit_test_nvmeof_image is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Export (check mode)
+      croit.ceph.nvmeof_disk:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        pool: "{{ croit_test_nvmeof_image.pool }}"
+        image: "{{ croit_test_nvmeof_image.image }}"
+      check_mode: true
+      register: r
+    - name: Assert export (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Opt-in export / re-run / remove
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      block:
+        - name: Export
+          croit.ceph.nvmeof_disk:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            pool: "{{ croit_test_nvmeof_image.pool }}"
+            image: "{{ croit_test_nvmeof_image.image }}"
+          register: r
+        - name: Export again
+          croit.ceph.nvmeof_disk:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            pool: "{{ croit_test_nvmeof_image.pool }}"
+            image: "{{ croit_test_nvmeof_image.image }}"
+          register: r2
+        - name: Remove (keep the image)
+          croit.ceph.nvmeof_disk:
+            gateway: "{{ croit_test_nvmeof_gateway }}"
+            pool: "{{ croit_test_nvmeof_image.pool }}"
+            image: "{{ croit_test_nvmeof_image.image }}"
+            state: absent
+            confirm_delete: true
+          register: r3
+        - name: Assert sequence
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed, r3 is changed, not r3.image_deleted]
+  always:
+    - name: Clean up (keep the image)
+      croit.ceph.nvmeof_disk:
+        gateway: "{{ croit_test_nvmeof_gateway }}"
+        pool: "{{ croit_test_nvmeof_image.pool }}"
+        image: "{{ croit_test_nvmeof_image.image }}"
+        state: absent
+        confirm_delete: true
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      failed_when: false

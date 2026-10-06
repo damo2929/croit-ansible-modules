@@ -1,0 +1,45 @@
+---
+# Only runs when croit_test_ipmi_server names a lab server with a BMC; uses identify (LED blink) only.
+- name: IPMI integration tests
+  when: croit_test_ipmi_server is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Power must already be on (check mode)
+      croit.ceph.ipmi:
+        server: "{{ croit_test_ipmi_server }}"
+        power: "on"
+      check_mode: true
+      register: r
+    - name: Assert power on is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Identify (check mode)
+      croit.ceph.ipmi:
+        server: "{{ croit_test_ipmi_server }}"
+        action: identify
+      check_mode: true
+      register: r
+    - name: Assert identify in check mode
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Identify
+      croit.ceph.ipmi:
+        server: "{{ croit_test_ipmi_server }}"
+        action: identify
+      register: r
+    - name: Assert identify ran
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Power off without confirmation is refused
+      croit.ceph.ipmi:
+        server: "{{ croit_test_ipmi_server }}"
+        power: "off"
+      register: r
+      failed_when: r is not failed

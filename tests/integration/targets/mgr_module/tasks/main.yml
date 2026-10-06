@@ -1,0 +1,88 @@
+---
+# Exercises an option of the always-on pg_autoscaler module and restores its original value.
+- name: Manager module integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read current sleep_interval
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: null
+      check_mode: true
+      register: original
+
+    - name: Set an option (check mode)
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: 61
+      check_mode: true
+      register: r
+    - name: Assert set (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Set an option
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: 61
+      register: r
+    - name: Assert set
+      ansible.builtin.assert:
+        that: [r is changed, r.options.sleep_interval == '61']
+
+    - name: Set again
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: 61
+      register: r
+    - name: Assert set again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Set again (check mode)
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: 61
+      check_mode: true
+      register: r
+    - name: Assert set again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Disabling an always-on module fails
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        enabled: false
+      register: r
+      ignore_errors: true
+    - name: Assert always-on cannot be disabled
+      ansible.builtin.assert:
+        that: [r is failed]
+
+    - name: Unknown option fails
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          no_such_option: 1
+      register: r
+      ignore_errors: true
+    - name: Assert unknown option fails
+      ansible.builtin.assert:
+        that: [r is failed]
+
+  always:
+    - name: Restore sleep_interval
+      croit.ceph.mgr_module:
+        name: pg_autoscaler
+        options:
+          sleep_interval: "{{ original.options.sleep_interval | default(omit) }}"
+      when: original.options is defined
+      failed_when: false

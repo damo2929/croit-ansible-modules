@@ -1,0 +1,83 @@
+---
+# Standard idempotency sequence (DESIGN.md section 4) for croit.ceph.api_token.
+- name: API token integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    token_name: "{{ croit_test_prefix | default('ansible-test') }}-token"
+    token_spec:
+      name: "{{ token_name }}"
+      roles: [viewer]
+    token_update: "{{ token_spec | combine({'roles': ['viewer', 'securefolder']}) }}"
+    token_gone:
+      name: "{{ token_name }}"
+      state: absent
+  block:
+    - name: Create (check mode)
+      croit.ceph.api_token: "{{ token_spec }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.api_token: "{{ token_spec }}"
+      register: r2
+      no_log: true
+    - name: Create again
+      croit.ceph.api_token: "{{ token_spec }}"
+      register: r3
+    - name: Create again (check mode)
+      croit.ceph.api_token: "{{ token_spec }}"
+      check_mode: true
+      register: r4
+    - name: Assert create
+      ansible.builtin.assert:
+        that:
+          - r is changed
+          - r.token is not defined
+          - r2 is changed
+          - r2.token is string
+          - r2.token | length > 0
+          - r3 is not changed
+          - r3.token is not defined
+          - r4 is not changed
+
+    - name: The new token works
+      croit.ceph.cluster_info:
+        api_token: "{{ r2.token }}"
+        gather: [version]
+      no_log: true
+
+    - name: Update (check mode)
+      croit.ceph.api_token: "{{ token_update }}"
+      check_mode: true
+      register: r
+    - name: Update
+      croit.ceph.api_token: "{{ token_update }}"
+      register: r2
+    - name: Update again
+      croit.ceph.api_token: "{{ token_update }}"
+      register: r3
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.api_token: "{{ token_gone }}"
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.api_token: "{{ token_gone }}"
+      register: r2
+    - name: Delete again
+      croit.ceph.api_token: "{{ token_gone }}"
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.api_token: "{{ token_gone }}"
+      failed_when: false

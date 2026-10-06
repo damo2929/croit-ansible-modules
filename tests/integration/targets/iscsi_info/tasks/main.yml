@@ -1,0 +1,19 @@
+---
+- name: Test iSCSI info integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read everything (check mode)
+      croit.ceph.iscsi_info:
+        gather: [gateways, servers, disks, groups, hosts, config]
+      check_mode: true
+      register: r
+    - name: Assert iSCSI info
+      ansible.builtin.assert:
+        that:
+          - r is not changed
+          - r.gateways is sequence
+          - r.hosts | selectattr('password', 'defined') | rejectattr('password', 'in', ['', '********']) | list | length == 0

@@ -1,0 +1,92 @@
+---
+# Check mode by default. Set croit_test_rgw_placement_pool to an existing replicated pool to really
+# create a placement rule and a storage class on it and delete them again.
+- name: S3 placement integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    rule: "{{ croit_test_prefix | default('ansible-test') }}-placement"
+  block:
+    - name: Create a rule (check mode)
+      croit.ceph.s3_placement:
+        name: "{{ rule }}"
+        data_pool: "{{ croit_test_rgw_placement_pool | default('rbd') }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed, r.placement | length == 0]
+
+    - name: Real create and delete
+      when: croit_test_rgw_placement_pool is defined
+      block:
+        - name: Create a rule
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            data_pool: "{{ croit_test_rgw_placement_pool }}"
+          register: r
+        - name: Assert create
+          ansible.builtin.assert:
+            that: [r is changed, r.placement.dataPool == croit_test_rgw_placement_pool]
+
+        - name: Create again
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            data_pool: "{{ croit_test_rgw_placement_pool }}"
+          register: r
+        - name: Assert create again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+
+        - name: Add a storage class
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            storage_class: COLD
+            data_pool: "{{ croit_test_rgw_placement_pool }}"
+          register: r
+        - name: Assert storage class
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Delete the rule (check mode)
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            state: absent
+            confirm_delete: true
+          check_mode: true
+          register: r
+        - name: Assert delete (check mode)
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Delete the rule with its classes
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            state: absent
+            confirm_delete: true
+            ignore_warnings: true
+          register: r
+        - name: Assert delete
+          ansible.builtin.assert:
+            that: [r is changed]
+
+        - name: Delete again
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            state: absent
+            confirm_delete: true
+          register: r
+        - name: Assert delete again is a no-op
+          ansible.builtin.assert:
+            that: [r is not changed]
+      always:
+        - name: Clean up the test rule
+          croit.ceph.s3_placement:
+            name: "{{ rule }}"
+            state: absent
+            confirm_delete: true
+            ignore_warnings: true
+          failed_when: false

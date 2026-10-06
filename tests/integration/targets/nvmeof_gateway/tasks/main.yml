@@ -1,0 +1,62 @@
+---
+# Read-only by default. Set croit_test_nvmeof_allow_changes=true to create and delete a throwaway
+# NVMe-oF cluster without target services.
+- name: NVMe-oF gateway integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    gw_name: "{{ croit_test_prefix | default('ansible-test') }}-nvmeof"
+  block:
+    - name: Create (check mode)
+      croit.ceph.nvmeof_gateway:
+        name: "{{ gw_name }}"
+        description: created by ansible-test
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Existing cluster is unchanged when nothing is set
+      croit.ceph.nvmeof_gateway:
+        name: "{{ croit_test_nvmeof_gateway }}"
+      check_mode: true
+      register: r
+      when: croit_test_nvmeof_gateway is defined
+    - name: Assert existing cluster unchanged
+      ansible.builtin.assert:
+        that: [r is not changed]
+      when: croit_test_nvmeof_gateway is defined
+
+    - name: Opt-in create / update / delete
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      block:
+        - name: Create
+          croit.ceph.nvmeof_gateway:
+            name: "{{ gw_name }}"
+            description: created by ansible-test
+          register: r
+        - name: Create again
+          croit.ceph.nvmeof_gateway:
+            name: "{{ gw_name }}"
+            description: created by ansible-test
+          register: r2
+        - name: Update
+          croit.ceph.nvmeof_gateway:
+            name: "{{ gw_name }}"
+            description: updated by ansible-test
+          register: r3
+        - name: Assert create, re-run, update
+          ansible.builtin.assert:
+            that: [r is changed, r2 is not changed, r3 is changed]
+  always:
+    - name: Clean up
+      croit.ceph.nvmeof_gateway:
+        name: "{{ gw_name }}"
+        state: absent
+        confirm_delete: true
+      when: croit_test_nvmeof_allow_changes | default(false) | bool
+      failed_when: false

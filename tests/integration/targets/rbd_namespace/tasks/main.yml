@@ -1,0 +1,64 @@
+---
+# Idempotency sequence for croit.ceph.rbd_namespace (nothing to update, so no update steps).
+- name: RBD namespace integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    prefix: "{{ croit_test_prefix | default('ansible-test') }}"
+    pool_name: "{{ prefix }}-ns"
+    ns:
+      pool: "{{ pool_name }}"
+      name: tenant
+    ns_gone: "{{ ns | combine({'state': 'absent'}) }}"
+  block:
+    - name: Pool for the tests
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        application: rbd
+        pg_num: 8
+
+    - name: Create (check mode)
+      croit.ceph.rbd_namespace: "{{ ns }}"
+      check_mode: true
+      register: r
+    - name: Create
+      croit.ceph.rbd_namespace: "{{ ns }}"
+      register: r2
+    - name: Create again
+      croit.ceph.rbd_namespace: "{{ ns }}"
+      register: r3
+    - name: Create again (check mode)
+      croit.ceph.rbd_namespace: "{{ ns }}"
+      check_mode: true
+      register: r4
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, "'tenant' in r2.namespaces", r3 is not changed, r4 is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.rbd_namespace: "{{ ns_gone }}"
+      check_mode: true
+      register: r
+    - name: Delete
+      croit.ceph.rbd_namespace: "{{ ns_gone }}"
+      register: r2
+    - name: Delete again
+      croit.ceph.rbd_namespace: "{{ ns_gone }}"
+      register: r3
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed, r2 is changed, r3 is not changed]
+
+  always:
+    - name: Clean up namespace
+      croit.ceph.rbd_namespace: "{{ ns_gone }}"
+      failed_when: false
+    - name: Clean up pool
+      croit.ceph.pool:
+        name: "{{ pool_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

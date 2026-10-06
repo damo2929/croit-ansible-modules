@@ -1,0 +1,54 @@
+---
+# Read-only: only runs check-mode tasks against an existing gateway. Never creates or removes one.
+- name: Test iSCSI gateway integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  block:
+    - name: Read the gateway
+      croit.ceph.iscsi_info:
+        gather: [gateways]
+      register: info
+
+    - name: Check the existing gateway
+      when: info.gateways | length > 0
+      block:
+        - name: Converged (check mode)
+          croit.ceph.iscsi_gateway:
+            description: "{{ info.gateways[0].description }}"
+          check_mode: true
+          register: r
+        - name: Assert converged
+          ansible.builtin.assert:
+            that:
+              - r is not changed
+              - r.gateway.serviceId == info.gateways[0].serviceId
+
+        - name: Change description (check mode)
+          croit.ceph.iscsi_gateway:
+            description: "{{ info.gateways[0].description }} (ansible-test)"
+          check_mode: true
+          diff: true
+          register: r
+        - name: Read the gateway again
+          croit.ceph.iscsi_info:
+            gather: [gateways]
+          register: again
+        - name: Assert nothing was written
+          ansible.builtin.assert:
+            that:
+              - r is changed
+              - again.gateways[0].description == info.gateways[0].description
+
+        - name: Delete without confirmation (check mode)
+          croit.ceph.iscsi_gateway:
+            state: absent
+          check_mode: true
+          register: r
+          ignore_errors: true
+        - name: Assert delete refused
+          ansible.builtin.assert:
+            that:
+              - r is failed

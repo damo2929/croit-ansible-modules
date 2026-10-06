@@ -1,0 +1,44 @@
+---
+namespace: croit
+name: ceph
+version: 0.1.0
+readme: README.md
+authors:
+  - Damien Dye <damien.dye@croit.io>
+description: >-
+  Manage croit Ceph clusters (pools, RBD, CephFS, S3, config, servers and services)
+  through the croit REST API with idempotent, check-mode aware modules.
+license:
+  - GPL-3.0-or-later
+  - BSD-2-Clause
+tags:
+  - croit
+  - ceph
+  - storage
+  - infrastructure
+  - s3
+  - cephfs
+  - rbd
+  - cloud
+dependencies: {}
+repository: https://github.com/damo2929/croit-ansible-modules
+documentation: https://github.com/damo2929/croit-ansible-modules/blob/main/README.md
+homepage: https://www.croit.io
+issues: https://github.com/damo2929/croit-ansible-modules/issues
+build_ignore:
+  - .git
+  - .github
+  - .gitignore
+  - .ansible-lint
+  - .claude
+  - .ansible
+  - .venv
+  - "*.tar.gz"
+  - AGENTS.md
+  - CLAUDE.md
+  - PLAN.md
+  - docs/openapi.json
+  - tools
+  - tests/output
+  - tests/integration/integration_config.yml
+  - changelogs/.plugin-cache.yaml

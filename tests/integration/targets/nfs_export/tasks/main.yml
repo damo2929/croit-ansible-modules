@@ -1,0 +1,116 @@
+---
+# Opt-in: set croit_test_nfs_servers to create a throwaway croit-nfs cluster, run the export sequence on it,
+# and delete the cluster again. The export points at an unused path and allows only a documentation subnet.
+- name: NFS export integration tests
+  when: croit_test_nfs_servers is defined
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  vars:
+    nfs_name: "{{ croit_test_prefix | default('ansible-test') }}-nfs-export"
+    export_spec:
+      cluster: "{{ nfs_name }}"
+      nfs_path: /ansible-test
+      path: /ansible-test
+      access:
+        - subnet: 192.0.2.0/24
+          rw: false
+  block:
+    - name: Throwaway cluster
+      croit.ceph.nfs_cluster:
+        name: "{{ nfs_name }}"
+        implementation: croit_nfs
+        servers: "{{ croit_test_nfs_servers }}"
+
+    - name: Create (check mode)
+      croit.ceph.nfs_export: "{{ export_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.nfs_export: "{{ export_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.export.nfsPath == '/ansible-test']
+
+    - name: Create again
+      croit.ceph.nfs_export: "{{ export_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Create again (check mode)
+      croit.ceph.nfs_export: "{{ export_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create again (check mode) is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Update (check mode)
+      croit.ceph.nfs_export: "{{ export_spec | combine({'nfs3': true}) }}"
+      check_mode: true
+      register: r
+    - name: Assert update (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Update
+      croit.ceph.nfs_export: "{{ export_spec | combine({'nfs3': true}) }}"
+      register: r
+    - name: Assert update
+      ansible.builtin.assert:
+        that: [r is changed, r.export.protocols.nfs3]
+
+    - name: Update again
+      croit.ceph.nfs_export: "{{ export_spec | combine({'nfs3': true}) }}"
+      register: r
+    - name: Assert update again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.nfs_export:
+        cluster: "{{ nfs_name }}"
+        nfs_path: /ansible-test
+        state: absent
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.nfs_export:
+        cluster: "{{ nfs_name }}"
+        nfs_path: /ansible-test
+        state: absent
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.nfs_export:
+        cluster: "{{ nfs_name }}"
+        nfs_path: /ansible-test
+        state: absent
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Remove the throwaway cluster
+      croit.ceph.nfs_cluster:
+        name: "{{ nfs_name }}"
+        state: absent
+        confirm_delete: true
+      failed_when: false

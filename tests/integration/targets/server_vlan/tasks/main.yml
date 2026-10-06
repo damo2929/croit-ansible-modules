@@ -1,0 +1,64 @@
+---
+# Creates and removes a VLAN without addresses on croit_test_vlan_nic of croit_test_server.
+# Skipped unless croit_test_vlan_nic is set; use an unused tag (croit_test_vlan, default 4000).
+- name: Server VLAN integration tests
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs | default(true) }}"
+  when: croit_test_vlan_nic is defined
+  vars:
+    vlan_spec:
+      server: "{{ croit_test_server }}"
+      nic: "{{ croit_test_vlan_nic }}"
+      vlan: "{{ croit_test_vlan | default(4000) | int }}"
+  block:
+    - name: Create (check mode)
+      croit.ceph.server_vlan: "{{ vlan_spec }}"
+      check_mode: true
+      register: r
+    - name: Assert create (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Create
+      croit.ceph.server_vlan: "{{ vlan_spec }}"
+      register: r
+    - name: Assert create
+      ansible.builtin.assert:
+        that: [r is changed, r.vlan.vlan == (croit_test_vlan | default(4000) | int)]
+
+    - name: Create again
+      croit.ceph.server_vlan: "{{ vlan_spec }}"
+      register: r
+    - name: Assert create again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+    - name: Delete (check mode)
+      croit.ceph.server_vlan: "{{ vlan_spec | combine({'state': 'absent', 'confirm_delete': true}) }}"
+      check_mode: true
+      register: r
+    - name: Assert delete (check mode)
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete
+      croit.ceph.server_vlan: "{{ vlan_spec | combine({'state': 'absent', 'confirm_delete': true}) }}"
+      register: r
+    - name: Assert delete
+      ansible.builtin.assert:
+        that: [r is changed]
+
+    - name: Delete again
+      croit.ceph.server_vlan: "{{ vlan_spec | combine({'state': 'absent', 'confirm_delete': true}) }}"
+      register: r
+    - name: Assert delete again is a no-op
+      ansible.builtin.assert:
+        that: [r is not changed]
+
+  always:
+    - name: Clean up
+      croit.ceph.server_vlan: "{{ vlan_spec | combine({'state': 'absent', 'confirm_delete': true}) }}"
+      failed_when: false
