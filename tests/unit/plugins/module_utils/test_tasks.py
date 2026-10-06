@@ -30,7 +30,7 @@ class Clock:
         self.now += seconds
 
 
-def setup(states, question=None):
+def start_task(states, question=None):
     """A task that walks through ``states`` on successive polls."""
     fake = FakeCroit()
     task = fake.new_task("Create pool", "p", state=states[0], output="")
@@ -54,7 +54,7 @@ def test_is_task():
 
 
 def test_wait_until_finished():
-    fake, client, task = setup(["RUNNING", "RUNNING", "FINISHED"])
+    fake, client, task = start_task(["RUNNING", "RUNNING", "FINISHED"])
     clock = Clock()
     final = wait_for_task(client, task, 60, sleep=clock.sleep, clock=clock)
     assert final["state"] == "FINISHED"
@@ -63,7 +63,7 @@ def test_wait_until_finished():
 
 
 def test_failed_task_raises_with_output():
-    fake, client, task = setup(["RUNNING", "FAILED"])
+    fake, client, task = start_task(["RUNNING", "FAILED"])
     clock = Clock()
     final = wait_for_task(client, task, 60, sleep=clock.sleep, clock=clock)
     with pytest.raises(CroitTaskError) as e:
@@ -79,7 +79,7 @@ def test_cancelled_task_raises():
 
 
 def test_timeout():
-    fake, client, task = setup(["RUNNING"])
+    fake, client, task = start_task(["RUNNING"])
     clock = Clock()
     with pytest.raises(CroitTaskError) as e:
         wait_for_task(client, task, 10, interval=2, sleep=clock.sleep, clock=clock)
@@ -88,7 +88,7 @@ def test_timeout():
 
 def test_question_fails_with_options():
     question = dict(message="Stop OSDs?", responseOptions=["Yes", "No"], defaultResponse="No", token="u")
-    fake, client, task = setup(["RUNNING"], question=question)
+    fake, client, task = start_task(["RUNNING"], question=question)
     clock = Clock()
     with pytest.raises(CroitTaskError) as e:
         wait_for_task(client, task, 60, sleep=clock.sleep, clock=clock)
