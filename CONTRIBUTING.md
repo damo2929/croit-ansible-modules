@@ -10,7 +10,7 @@ Thanks for helping. This collection holds itself to a strict standard, because i
 
 ## Workflow
 
-1. Fork the repo and check it out at a path ending in `ansible_collections/croit/ceph`, because `ansible-test` needs that layout.
+1. Fork the repo and check it out at a path ending in `ansible_collections/croit/ceph`, because `ansible-test` and `tools/check_docs.py` need that layout.
 2. Create a branch.
 3. Make the change. Follow `plugins/modules/pool.py` as the reference module, and reuse `plugins/module_utils`.
 4. Add or update:
@@ -27,6 +27,7 @@ Thanks for helping. This collection holds itself to a strict standard, because i
    antsibull-docs lint-collection-docs --plugin-docs .
    antsibull-changelog lint
    python tools/check_spec_drift.py
+   python tools/check_docs.py
    ```
 
 6. Open a pull request. CI runs the same checks, on ansible-core 2.14 through devel.

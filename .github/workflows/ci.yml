@@ -76,6 +76,9 @@ jobs:
       - name: API spec drift
         working-directory: ansible_collections/croit/ceph
         run: python tools/check_spec_drift.py
+      - name: Documentation standard (module docs, README and guide examples)
+        working-directory: ansible_collections/croit/ceph
+        run: python tools/check_docs.py
 
   docs:
     name: Build the docsite

@@ -30,6 +30,7 @@ This is the authoritative design for the `croit.ceph` collection. Read it before
 | 2026-10-06 | Deleting a gateway disk (iSCSI or NVMe-oF) only stops the export by default. Deleting the RBD image behind it needs `delete_image: true` (plus `confirm_delete`). |
 | 2026-10-06 | One-way or disruptive cluster changes need `confirm_action`: S3 multisite convert, join and promote; the NFS implementation switch; the SMB DNS-name change and generation migration. They are never made in check mode. |
 | 2026-10-06 | Documentation standard (AGENTS.md "Module documentation standard"): every module has `seealso`, fully described options, at least 3 examples (header comment plus `module_defaults`), and RETURN with `returned`, `type` and `contains`/`sample`. Collection docs live in `docs/docsite/` (guides, `links.yml`, `extra-docs.yml`). CI builds the docsite with warnings treated as errors. |
+| 2026-10-06 | `tools/check_docs.py` enforces the documentation standard and validates every example in CI. AGENTS.md also records the safety-semantics table, the rules for parallel work and known pitfalls. |
 | 2026-10-06 | The repo keeps `DESIGN.md`, `README.md` and `AGENTS.md` (plus `PLAN.md`) up to date with every change. |
 
 ## 1. What the API tells us (design drivers)
@@ -91,7 +92,8 @@ croit-ansible/  (checked out as ansible_collections/croit/ceph for ansible-test)
 ├── CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md
 ├── docs/docsite/                  # links.yml, extra-docs.yml, rst/ guides (rendered on Galaxy / docsite)
 ├── docs/openapi.json              # vendored spec snapshot (drift checks; excluded from the build)
-└── tools/check_spec_drift.py      # flags module endpoints/fields that no longer match the spec
+├── tools/check_spec_drift.py      # flags module endpoints that no longer match the spec
+└── tools/check_docs.py            # documentation standard + example validation
 ```
 
 **Runtime requirements (EL9 compatible):** Python ≥ 3.9 and ansible-core ≥ 2.14.
@@ -199,6 +201,7 @@ The collection is built from the start to be published on [Ansible Galaxy](https
 5. `antsibull-docs lint-collection-docs --plugin-docs`, and a full docsite build (`antsibull-docs sphinx-init` + `build.sh`) with warnings treated as errors.
 6. `antsibull-changelog lint`.
 7. `python tools/check_spec_drift.py`: every `# croit-api:` endpoint declared by a module exists in `docs/openapi.json`.
+8. `python tools/check_docs.py`: every module meets the AGENTS.md documentation standard, and every `croit.ceph` task in module EXAMPLES, the README and the guides uses real options and valid choices.
 
 Status on 2026-10-06 (after Phase 4: 82 modules, 686 unit tests): every gate passes locally. That means sanity and units on ansible-core 2.20 with Python 3.14 **and** on ansible-core 2.14.18 with Python 3.9 in a Rocky 9 container, ansible-lint with the production profile, both antsibull lints, the drift check (461 endpoints), and galaxy-importer 0.4.43 ("Importer processing completed successfully"). The importer's only warning is the expected `meta-runtime[unsupported-version]` for 2.14 (see the decisions log).
 
