@@ -1,0 +1,91 @@
+---
+# Rolling reboot of croit storage nodes, one at a time, waiting for each node
+# and for Ceph to recover before the next. Nodes are the croit hostnames in
+# the croit_storage_nodes inventory group.
+#
+# This reboots storage nodes, so it refuses to run unless you confirm it:
+#   ansible-playbook 08_rolling_maintenance.yml -e rolling_reboot_confirm=true
+- name: Prepare the cluster
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  tasks:
+    - name: Require explicit confirmation
+      ansible.builtin.assert:
+        that: rolling_reboot_confirm | default(false) | bool
+        fail_msg: "This reboots storage nodes. Re-run with -e rolling_reboot_confirm=true"
+
+    - name: Keep data in place while nodes reboot
+      croit.ceph.osd_flag:
+        flags: [noout]
+        state: present
+
+- name: Reboot storage nodes one at a time
+  hosts: croit_storage_nodes
+  serial: 1
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    health_ignored_checks: [OSDMAP_FLAGS]
+  tasks:
+    - name: Wait until Ceph is healthy before touching this node
+      croit.ceph.cluster_info:
+        gather: [status]
+      register: before
+      until: >-
+        ((before.status.cephStatus | default({}, true)).health.checks | default({}))
+        | dict2items | map(attribute='key') | reject('in', health_ignored_checks) | list | length == 0
+      retries: 60
+      delay: 30
+
+    - name: Reboot the node
+      croit.ceph.server:
+        server: "{{ inventory_hostname }}"
+        action: reboot
+        confirm_action: true    # takes a storage node down
+
+    - name: Give the node time to go down
+      ansible.builtin.pause:
+        seconds: 60
+
+    - name: Wait for the node to be running again
+      croit.ceph.server_info:
+        servers: ["{{ inventory_hostname }}"]
+      register: node
+      until: node.servers | length == 1 and node.servers[0].state == 'running'
+      retries: 60
+      delay: 20
+
+    - name: Wait for Ceph to recover
+      croit.ceph.cluster_info:
+        gather: [status]
+      register: after
+      until: >-
+        ((after.status.cephStatus | default({}, true)).health.checks | default({}))
+        | dict2items | map(attribute='key') | reject('in', health_ignored_checks) | list | length == 0
+      retries: 120
+      delay: 30
+
+# Only reached when every node rebooted cleanly. If a node fails, noout stays
+# set on purpose: fix the node, then re-run (or clear it with osd_flag).
+- name: Return the cluster to normal
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  tasks:
+    - name: Clear noout
+      croit.ceph.osd_flag:
+        flags: [noout]
+        state: absent

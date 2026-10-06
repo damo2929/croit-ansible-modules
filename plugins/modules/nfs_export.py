@@ -202,10 +202,10 @@ export:
       sample: {nfs3: false, nfs4: true}
 """
 
-import ipaddress
 import posixpath
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_network
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import find_one
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
@@ -218,16 +218,8 @@ def normalise_path(value):
     return "/" + text.lstrip("/")
 
 
-def normalise_subnet(value):
-    text = str(value).strip()
-    try:
-        return str(ipaddress.ip_network(text, strict=False))
-    except ValueError:
-        return text
-
-
 def access_set(entries):
-    return sorted(set((normalise_subnet(e.get("subnet")), bool(e.get("rw"))) for e in entries or []))
+    return sorted(set((normalise_network(e.get("subnet")), bool(e.get("rw"))) for e in entries or []))
 
 
 def access_view(entries):

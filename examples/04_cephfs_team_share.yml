@@ -1,0 +1,58 @@
+---
+# A CephFS subvolume per team, with a quota, exported over NFS.
+- name: CephFS shares for teams
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    cephfs_volume: cephfs
+    cephfs_group: teams
+    nfs_cluster: nfs-office
+    office_subnet: 10.20.0.0/16
+    teams:
+      - {name: data-science, size: 2T, gid: 3000}
+      - {name: finance, size: 500G, gid: 3100}
+  tasks:
+    - name: Subvolume group for team shares
+      croit.ceph.cephfs_subvolume_group:
+        volume: "{{ cephfs_volume }}"
+        name: "{{ cephfs_group }}"
+
+    - name: One subvolume per team, with a quota
+      croit.ceph.cephfs_subvolume:
+        volume: "{{ cephfs_volume }}"
+        group: "{{ cephfs_group }}"
+        name: "{{ item.name }}"
+        size: "{{ item.size }}"
+        mode: "0770"
+        uid: 0
+        gid: "{{ item.gid }}"
+      loop: "{{ teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Export each share to the office network over NFS
+      croit.ceph.nfs_export:
+        cluster: "{{ nfs_cluster }}"
+        nfs_path: "/{{ item.name }}"
+        path: "/volumes/{{ cephfs_group }}/{{ item.name }}"
+        volume: "{{ cephfs_volume }}"
+        access:
+          - subnet: "{{ office_subnet }}"
+            rw: true
+      loop: "{{ teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Read the NFS cluster back
+      croit.ceph.nfs_info:
+        name: "{{ nfs_cluster }}"
+      register: nfs
+
+    - name: Show the exports
+      ansible.builtin.debug:
+        msg: "{{ nfs.clusters | map(attribute='exports') | flatten | map(attribute='nfsPath', default='?') | list }}"

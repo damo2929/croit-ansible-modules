@@ -240,6 +240,7 @@ task:
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import find_server, list_servers
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule, changed_fields
 
@@ -301,7 +302,11 @@ class ServerModule(CroitModule):
             )
 
         desired = dict((api, p[opt]) for opt, api in FIELDS.items())
-        if desired["ip"] is not None and desired["ip"] != current.get("ip") and desired["ip"] not in (current.get("ips") or []):
+        if desired["ip"] is not None and normalise_ip(desired["ip"]) == normalise_ip(current.get("ip")):
+            # Same address in another notation, for example an uncompressed IPv6 address.
+            desired["ip"] = current.get("ip")
+        known = [normalise_ip(i) for i in current.get("ips") or []]
+        if desired["ip"] is not None and desired["ip"] != current.get("ip") and normalise_ip(desired["ip"]) not in known:
             self.module.fail_json(
                 msg="ip %s is not assigned to any interface of %s; known addresses: %s"
                 % (desired["ip"], current["hostname"], ", ".join(current.get("ips") or []) or "none")

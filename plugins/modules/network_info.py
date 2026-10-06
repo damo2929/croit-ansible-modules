@@ -130,10 +130,9 @@ networks:
       sample: 192.168.100.200
 """
 
-import ipaddress
-
 from ansible.module_utils.common.text.converters import to_text
 
+from ansible_collections.croit.ceph.plugins.module_utils.ip import ip_network
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
 
@@ -149,15 +148,15 @@ def main():
     wanted = None
     if m.params["cidr"]:
         try:
-            wanted = ipaddress.ip_network(to_text(m.params["cidr"]).strip(), strict=False)
+            wanted = ip_network(to_text(m.params["cidr"]))
         except ValueError as e:
             m.module.fail_json(msg="cidr: %s" % e)
 
     networks = []
     for item in m.get_list("/networks"):
         try:
-            net = ipaddress.ip_network(u"%s/%s" % (to_text(item.get("ip")), item.get("netmask")), strict=False)
-        except (ValueError, TypeError):
+            net = ip_network(u"%s/%s" % (to_text(item.get("ip")), item.get("netmask")))
+        except ValueError:
             net = None
         if wanted is not None and net != wanted:
             continue

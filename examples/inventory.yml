@@ -1,0 +1,16 @@
+---
+# The croit.ceph modules run on the Ansible controller and talk to the croit
+# API over HTTPS, so every host here uses a local connection.
+all:
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  children:
+    croit:
+      hosts:
+        croit-mgmt:              # one entry per croit cluster you manage
+    croit_storage_nodes:         # croit hostnames, used by 08_rolling_maintenance.yml
+      hosts:
+        storage-01:
+        storage-02:
+        storage-03:

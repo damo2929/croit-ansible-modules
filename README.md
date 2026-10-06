@@ -143,6 +143,8 @@ All examples below assume this `module_defaults` block.
 
 ## Use cases and examples
 
+Complete, runnable playbooks for these and more scenarios are in [`examples/`](examples/): health gate, inventory report, VM block storage, CephFS shares, S3 tenants and key rotation, configuration as code, rolling node maintenance, access management, SMB shares and long-running jobs.
+
 ### 1. Check cluster health before changing anything
 
 ```yaml
@@ -422,6 +424,54 @@ Growing a disk later is a one-line change. `size` only ever grows; shrinking is 
   no_log: true
 ```
 
+### 10. IPv6 and dual-stack networks
+
+Addresses below use `2001:db8::/32`, the IPv6 documentation prefix (RFC 3849). IPv6 addresses are compared in canonical form, so `2001:DB8:100:0:0:0:0:11/64` and `2001:db8:100::11/64` count as the same address and a re-run reports no change. The full playbook is [`examples/12_ipv6_networking.yml`](examples/12_ipv6_networking.yml).
+
+```yaml
+- name: Ceph public network over IPv6
+  croit.ceph.network:
+    cidr: 2001:db8:100::/64
+    type: ceph_public
+    gateway: "2001:db8:100::1"
+
+- name: IPv6 address next to the node's IPv4 address
+  croit.ceph.server_nic:
+    server: storage-01
+    nic: bond0
+    ip6: 2001:db8:100::11/64
+
+- name: Replication network on VLAN 200, IPv6 only
+  croit.ceph.server_vlan:
+    server: storage-01
+    nic: bond0
+    vlan: 200
+    ip6: 2001:db8:200::11/64
+
+- name: S3 on an IPv6 virtual IP
+  croit.ceph.ha_group:
+    name: s3-frontend-v6
+    service: rgw
+    backend: keepafloatd
+    vips: ["2001:db8:100::80"]
+    servers:
+      - {server: storage-01, nic: bond0}
+      - {server: storage-02, nic: bond0}
+    haproxy: true
+    backend_servers: [storage-01, storage-02]
+
+- name: NFS export for IPv6 clients
+  croit.ceph.nfs_export:
+    cluster: nfs-office
+    nfs_path: /shared
+    path: /volumes/_nogroup/shared
+    volume: cephfs
+    access:
+      - {subnet: "2001:db8:300::/56", rw: true}
+```
+
+URLs with an IPv6 literal need brackets, both for the croit API (`api_url: https://[2001:db8:100::5]/api`) and for S3 endpoints (`https://[2001:db8:100::80]:443`). Quoting IPv6 addresses in YAML is a safe habit: a bare all-digit address without `::`, such as `1:2:3:4:5:6:7:8`, is read as a base-60 number by YAML 1.1 parsers.
+
 ### Dry runs
 
 Every example above can be previewed safely:
@@ -552,6 +602,7 @@ All modules are unit-tested against a fake croit API built from the spec. None h
 ## Documentation
 
 - **Module reference:** run `ansible-doc croit.ceph.<module>`, or see the docsite once the collection is published on Galaxy.
+- **Example playbooks:** [`examples/`](examples/).
 - **Guides:** in [`docs/docsite/rst/`](docs/docsite/rst/):
   - [Getting started](docs/docsite/rst/guide_getting_started.rst)
   - [Idempotency, check mode and safety flags](docs/docsite/rst/guide_safety.rst)

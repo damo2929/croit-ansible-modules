@@ -1,0 +1,45 @@
+---
+# Zero-downtime S3 key rotation in two runs:
+#   1. ansible-playbook 06_s3_key_rotation.yml -e rotation_phase=add
+#      (roll the new key out to the applications)
+#   2. ansible-playbook 06_s3_key_rotation.yml -e rotation_phase=finish
+- name: Rotate an S3 access key
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    rotation_uid: acme
+    rotation_new_access_key: ACMEACCESSKEY0002
+    rotation_phase: add
+  tasks:
+    - name: Check the phase
+      ansible.builtin.assert:
+        that: rotation_phase in ['add', 'finish']
+        fail_msg: "rotation_phase must be 'add' or 'finish'"
+
+    - name: Phase 1 - add the new key next to the old one
+      croit.ceph.s3_user_key:
+        uid: "{{ rotation_uid }}"
+        access_key: "{{ rotation_new_access_key }}"
+        secret_key: "{{ vault_acme_s3_secret_v2 }}"
+      no_log: true
+      when: rotation_phase == 'add'
+
+    - name: Phase 2 - make the new key the only one
+      croit.ceph.s3_user_key:
+        uid: "{{ rotation_uid }}"
+        access_key: "{{ rotation_new_access_key }}"
+        secret_key: "{{ vault_acme_s3_secret_v2 }}"
+        exclusive: true
+      register: rotated
+      no_log: true
+      when: rotation_phase == 'finish'
+
+    - name: Show which keys were removed
+      ansible.builtin.debug:
+        msg: "Removed access keys: {{ rotated.removed_keys | default([]) | join(', ') }}"
+      when: rotation_phase == 'finish'

@@ -1,0 +1,93 @@
+---
+# Block storage for a virtualisation platform: pool, per-tenant namespaces,
+# VM disks, hourly snapshots and a client key installed on the hypervisors.
+- name: Provision RBD storage for VMs
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    vm_pool: rbd-vms
+    vm_pool_quota: 20T
+    vm_tenants:
+      - name: tenant-a
+        disks:
+          - {name: web-01-root, size: 100G}
+          - {name: db-01-data, size: 500G}
+      - name: tenant-b
+        disks:
+          - {name: app-01-root, size: 50G}
+    vm_client: client.hypervisors
+    vm_keyring_dir: "{{ playbook_dir }}/keyrings"
+  tasks:
+    - name: Replicated pool for VM disks
+      croit.ceph.pool:
+        name: "{{ vm_pool }}"
+        application: rbd
+        size: 3
+        min_size: 2
+        quota_max_bytes: "{{ vm_pool_quota }}"
+        description: VM disks for the hypervisor cluster
+
+    - name: One namespace per tenant
+      croit.ceph.rbd_namespace:
+        pool: "{{ vm_pool }}"
+        name: "{{ item.name }}"
+      loop: "{{ vm_tenants }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: VM disks
+      croit.ceph.rbd:
+        pool: "{{ vm_pool }}"
+        namespace: "{{ item.0.name }}"
+        name: "{{ item.1.name }}"
+        size: "{{ item.1.size }}"
+        features: [layering, exclusive_lock, object_map, fast_diff, deep_flatten]
+      loop: "{{ vm_tenants | subelements('disks') }}"
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1.name }}"
+
+    - name: Build the snapshot target list
+      ansible.builtin.set_fact:
+        vm_snapshot_targets: "{{ vm_snapshot_targets | default([]) + [{'pool': vm_pool, 'namespace': item.0.name, 'image': item.1.name}] }}"
+      loop: "{{ vm_tenants | subelements('disks') }}"
+      loop_control:
+        label: "{{ item.0.name }}/{{ item.1.name }}"
+
+    - name: Hourly snapshots of every VM disk, keep 24
+      croit.ceph.snapshot_schedule:
+        type: rbd
+        snapshot_prefix: hourly
+        cron: "0 * * * *"
+        max_snapshots: 24
+        rbd_paths: "{{ vm_snapshot_targets }}"
+
+    - name: Ceph client key for the hypervisors
+      croit.ceph.ceph_key:
+        name: "{{ vm_client }}"
+        caps:
+          mon: profile rbd
+          osd: "profile rbd pool={{ vm_pool }}"
+          mgr: "profile rbd pool={{ vm_pool }}"
+        comment: Hypervisor hosts
+        return_keyring: true
+      register: hv_key
+      no_log: true
+
+    - name: Create the keyring directory
+      ansible.builtin.file:
+        path: "{{ vm_keyring_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Save the keyring for distribution to the hypervisors
+      ansible.builtin.copy:
+        content: "{{ hv_key.keyring.contents }}"
+        dest: "{{ vm_keyring_dir }}/ceph.{{ vm_client }}.keyring"
+        mode: "0600"
+      when: hv_key.keyring is defined
+      no_log: true

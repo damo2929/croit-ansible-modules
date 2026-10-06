@@ -459,6 +459,7 @@ tasks:
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import list_servers, require_server, resolve_interface
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 from ansible_collections.croit.ceph.plugins.module_utils.smb import (
@@ -471,7 +472,6 @@ from ansible_collections.croit.ceph.plugins.module_utils.smb import (
     generation,
     list_clusters,
     merge_options,
-    normalise_ip,
     options_request,
     options_view,
 )

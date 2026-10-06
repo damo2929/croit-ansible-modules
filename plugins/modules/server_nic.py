@@ -190,14 +190,18 @@ nic:
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import find_nic, normalise_mac, require_server
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
 FIELDS = dict(ip="ip", ip6="ip6", notes="notes")
+# Compared after normalise_ip, so 2001:DB8::0:1/64 matches 2001:db8::1/64.
+ADDRESSES = ("ip", "ip6")
 
 
 def host_part(address):
-    return (address or "").split("/", 1)[0]
+    """The address without its prefix length, in canonical notation (IPv6 is compressed and lower case)."""
+    return normalise_ip((address or "").split("/", 1)[0])
 
 
 def managed_view(nic):
@@ -258,7 +262,10 @@ class ServerNicModule(CroitModule):
         before = managed_view(current)
         changes = {}
         for opt, api in FIELDS.items():
-            if p[opt] is not None and p[opt] != before[opt]:
+            if p[opt] is None:
+                continue
+            same = normalise_ip(p[opt]) == normalise_ip(before[opt]) if opt in ADDRESSES else p[opt] == before[opt]
+            if not same:
                 changes[api] = p[opt]
         if p["new_mac"] is not None and normalise_mac(p["new_mac"]) != normalise_mac(current.get("mac")):
             changes["mac"] = p["new_mac"]

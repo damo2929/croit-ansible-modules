@@ -31,6 +31,8 @@ This is the authoritative design for the `croit.ceph` collection. Read it before
 | 2026-10-06 | One-way or disruptive cluster changes need `confirm_action`: S3 multisite convert, join and promote; the NFS implementation switch; the SMB DNS-name change and generation migration. They are never made in check mode. |
 | 2026-10-06 | Documentation standard (AGENTS.md "Module documentation standard"): every module has `seealso`, fully described options, at least 3 examples (header comment plus `module_defaults`), and RETURN with `returned`, `type` and `contains`/`sample`. Collection docs live in `docs/docsite/` (guides, `links.yml`, `extra-docs.yml`). CI builds the docsite with warnings treated as errors. |
 | 2026-10-06 | `tools/check_docs.py` enforces the documentation standard and validates every example in CI. AGENTS.md also records the safety-semantics table, the rules for parallel work and known pitfalls. |
+| 2026-10-06 | `examples/` holds runnable, parameterised sample playbooks. They ship in the collection tarball, `tools/check_docs.py` validates every `croit.ceph` task in them, and they must pass ansible-lint production. |
+| 2026-10-06 | IP handling uses the stdlib **`ipaddress`** module, the same code the `ansible.utils.ipv6form` filter runs (`ipaddress.ip_address(value).compressed`). Modules cannot import filter or `plugin_utils` code (AnsiballZ only bundles `module_utils`; verified), so they call the stdlib directly. netaddr was tried and dropped: it added a dependency without being what `ipv6form` uses. All parsing and comparison goes through `module_utils/ip.py` (`ip_address`, `ip_interface`, `ip_network`, `normalise_ip`, `normalise_network`), replacing four private copies. Addresses are compared in canonical form, so IPv6 written uncompressed or in upper case is not a change. Documentation and examples use only documentation ranges: `2001:db8::/32` (RFC 3849) for IPv6. |
 | 2026-10-06 | The repo keeps `DESIGN.md`, `README.md` and `AGENTS.md` (plus `PLAN.md`) up to date with every change. |
 
 ## 1. What the API tells us (design drivers)
@@ -91,6 +93,7 @@ croit-ansible/  (checked out as ansible_collections/croit/ceph for ansible-test)
 │   └── sanity/ignore-*.txt        # only if ever needed; none today
 ├── CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md
 ├── docs/docsite/                  # links.yml, extra-docs.yml, rst/ guides (rendered on Galaxy / docsite)
+├── examples/                      # runnable sample playbooks, inventory, group_vars, vault template
 ├── docs/openapi.json              # vendored spec snapshot (drift checks; excluded from the build)
 ├── tools/check_spec_drift.py      # flags module endpoints that no longer match the spec
 └── tools/check_docs.py            # documentation standard + example validation
@@ -99,7 +102,7 @@ croit-ansible/  (checked out as ansible_collections/croit/ceph for ansible-test)
 **Runtime requirements (EL9 compatible):** Python ≥ 3.9 and ansible-core ≥ 2.14.
 - **Python 3.9** is EL9's system Python (`/usr/bin/python3`). All code stays 3.9-compatible: no `match`, no `X | Y` type unions, and no stdlib features added in 3.10 or later.
 - **ansible-core 2.14** is the version EL9 AppStream ships. `meta/runtime.yml` sets `requires_ansible: ">=2.14.0"`, and nothing used may need a newer core.
-- The collection uses **no third-party libraries**: HTTP goes through `ansible.module_utils.urls.open_url`. That way a plain `dnf install ansible-core` on EL9 is enough, with no pip.
+- The collection uses **no third-party libraries**: HTTP goes through `ansible.module_utils.urls.open_url`, and IP handling through the stdlib `ipaddress` module. That way a plain `dnf install ansible-core` on EL9 is enough, with no pip.
 
 **Execution model:** the modules run on the controller, usually with `delegate_to: localhost` or `connection: local`, and talk to the croit management node over HTTPS. An `action_group` called `croit.ceph.all` lets you set connection defaults once through `module_defaults`.
 

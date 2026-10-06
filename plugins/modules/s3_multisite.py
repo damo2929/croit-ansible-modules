@@ -228,6 +228,13 @@ EXAMPLES = r"""
       - http://10.1.0.12:80
       - http://10.1.0.13:80
     update_endpoints: true
+
+- name: Rewrite the endpoints for gateways reached over IPv6 (address literals in brackets)
+  croit.ceph.s3_multisite:
+    endpoints:
+      - http://[2001:db8:1::11]:80
+      - http://[2001:db8:1::12]:80
+    update_endpoints: true
 """
 
 RETURN = r"""

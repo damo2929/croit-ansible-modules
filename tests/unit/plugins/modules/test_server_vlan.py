@@ -131,3 +131,13 @@ def test_ip_conflict_warning(monkeypatch):
     assert r["warning"] == "IP conflicts"
     r = run(monkeypatch, fake, server="node1", nic="bond0", vlan=110, ip="10.0.0.1/24", ignore_warnings=True)
     assert r["changed"]
+
+
+def test_ipv6_is_compared_in_canonical_notation(monkeypatch):
+    fake = cluster()
+    spec = dict(server="node1", nic="bond0", vlan=120, ip6="2001:db8:120::1/64")
+    assert run(monkeypatch, fake, **spec)["changed"]
+    for spelling in ("2001:DB8:120::1/64", "2001:db8:120:0:0:0:0:1/64"):
+        spec["ip6"] = spelling
+        assert not run(monkeypatch, fake, **spec)["changed"], spelling
+        assert_only_gets(fake)

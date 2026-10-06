@@ -8,9 +8,9 @@ Runs ``ansible-doc --json`` on every module, then checks:
 
 * the module docs: description depth, seealso, option descriptions and types,
   RETURN completeness (returned/type, contains or sample), EXAMPLES quality;
-* every ``croit.ceph.*`` task in the module EXAMPLES, README.md and the
-  docsite guides: options must exist (aliases count) and values must be
-  valid choices.
+* every ``croit.ceph.*`` task in the module EXAMPLES, README.md, the
+  docsite guides and the playbooks in examples/: options must exist
+  (aliases count) and values must be valid choices.
 
 Run it from a checkout at ``.../ansible_collections/croit/ceph``::
 
@@ -186,6 +186,12 @@ class Checker:
             except yaml.YAMLError as e:
                 self.add(os.path.relpath(path, ROOT), "YAML block does not parse: %s" % e)
 
+    def playbook(self, path):
+        try:
+            self.tasks(os.path.relpath(path, ROOT), yaml.safe_load(open(path)))
+        except yaml.YAMLError as e:
+            self.add(os.path.relpath(path, ROOT), "does not parse: %s" % e)
+
     def rst(self, path):
         lines = open(path).read().split("\n")
         i = 0
@@ -219,6 +225,8 @@ def main():
         checker.markdown(os.path.join(ROOT, "README.md"))
         for path in sorted(glob.glob(os.path.join(ROOT, "docs", "docsite", "rst", "*.rst"))):
             checker.rst(path)
+        for path in sorted(glob.glob(os.path.join(ROOT, "examples", "*.yml"))):
+            checker.playbook(path)
     for problem in checker.problems:
         print(problem)
     print("Checked %d module(s); %d problem(s)." % (len(modules), len(checker.problems)))

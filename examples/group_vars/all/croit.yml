@@ -1,0 +1,7 @@
+---
+# Connection settings used by every playbook through module_defaults.
+croit_api_url: https://croit-mgmt/api
+# Over IPv6, bracket the address literal:
+# croit_api_url: https://[2001:db8:100::5]/api
+croit_api_token: "{{ vault_croit_api_token }}"
+croit_validate_certs: true

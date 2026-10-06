@@ -1,0 +1,64 @@
+---
+# Ceph and cluster configuration as code. Run with --check --diff to see drift.
+- name: Ceph configuration
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    ceph_options:
+      - {name: osd_memory_target, section: osd, value: 8G}
+      - {name: osd_memory_target, section: osd, mask: "host:storage-07", value: 4G}
+      - {name: mon_max_pg_per_osd, value: 300}
+    ceph_options_reset:
+      - {name: osd_max_backfills}
+  tasks:
+    - name: Set Ceph options
+      croit.ceph.ceph_config:
+        name: "{{ item.name }}"
+        section: "{{ item.section | default(omit) }}"
+        mask: "{{ item.mask | default(omit) }}"
+        value: "{{ item.value }}"
+      loop: "{{ ceph_options }}"
+      loop_control:
+        label: "{{ item.section | default('global') }}/{{ item.mask | default('') }} {{ item.name }}"
+
+    - name: Put options back on Ceph's default
+      croit.ceph.ceph_config:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ ceph_options_reset }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Cluster-wide tuning
+      croit.ceph.cluster_tuning:
+        recovery_speed: 5
+        full_ratios:
+          nearfull: 0.85
+          backfillfull: 0.90
+          full: 0.95
+
+    - name: Turn on the balancer
+      croit.ceph.mgr_module:
+        name: balancer
+        enabled: true
+
+    - name: CRUSH rule that keeps replicas on SSDs across hosts
+      croit.ceph.crush_rule:
+        name: replicated_ssd
+        type: simple
+        start_bucket: default
+        failure_domain: host
+        device_class: ssd
+
+    - name: List every option that differs from its default
+      croit.ceph.ceph_config_info:
+      register: config
+
+    - name: Show them
+      ansible.builtin.debug:
+        msg: "{{ config.config | map(attribute='name') | unique | sort }}"

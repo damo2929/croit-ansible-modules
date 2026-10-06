@@ -1,0 +1,50 @@
+---
+# croit accounts and API tokens.
+- name: Manage croit access
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    token_dir: "{{ playbook_dir }}/tokens"
+  tasks:
+    - name: Read-only account for the monitoring team
+      croit.ceph.user:
+        username: monitoring
+        password: "{{ vault_monitoring_password }}"
+        roles: [viewer]
+        update_password: on_create
+
+    - name: Remove a former colleague's account
+      croit.ceph.user:
+        username: jdoe
+        state: absent
+
+    - name: API token for a CI pipeline
+      croit.ceph.api_token:
+        name: ci-pipeline
+        roles: [admin, viewer]
+      register: ci_token
+      no_log: true          # the token is returned once, on creation
+
+    - name: Create the token directory
+      ansible.builtin.file:
+        path: "{{ token_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Store the new token (only on the run that created it)
+      ansible.builtin.copy:
+        content: "{{ ci_token.token }}"
+        dest: "{{ token_dir }}/ci-pipeline"
+        mode: "0600"
+      when: ci_token.token is defined
+      no_log: true
+
+    - name: SSH key allowed on every croit-managed server
+      croit.ceph.server_ssh_keys:
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq0examplekeyonlyforthedocs0000000000000 ops@example"

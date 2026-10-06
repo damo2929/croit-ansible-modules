@@ -1,0 +1,92 @@
+---
+# Read-only inventory report of a croit cluster, written as Markdown.
+# Safe to run with a viewer-only API token.
+- name: Write a croit inventory report
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    report_dir: "{{ playbook_dir }}/reports"
+  tasks:
+    - name: Read cluster information
+      croit.ceph.cluster_info:
+        gather: [status, version]
+      register: cluster
+
+    - name: Read servers
+      croit.ceph.server_info:
+      register: servers
+
+    - name: Read disks
+      croit.ceph.disk_info:
+      register: disks
+
+    - name: Read pools
+      croit.ceph.pool_info:
+      register: pools
+
+    - name: Read services
+      croit.ceph.service_info:
+      register: services
+
+    - name: Read S3 users
+      croit.ceph.s3_user_info:
+      register: s3_users
+
+    - name: Create the report directory
+      ansible.builtin.file:
+        path: "{{ report_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Write the report
+      ansible.builtin.copy:
+        dest: "{{ report_dir }}/{{ inventory_hostname }}.md"
+        mode: "0640"
+        content: |
+          # croit cluster report: {{ inventory_hostname }}
+
+          - croit version: {{ cluster.version }}
+          - Ceph health: {{ (cluster.status.cephStatus | default({}, true)).health.status | default('unknown') }}
+
+          ## Servers ({{ servers.servers | length }})
+
+          | Hostname | IP | State | Image |
+          |---|---|---|---|
+          {% for s in servers.servers | sort(attribute='hostname') %}
+          | {{ s.hostname }} | {{ s.ip }} | {{ s.state }} | {{ s.image }} |
+          {% endfor %}
+
+          ## Disks ({{ disks.disks | length }})
+
+          {% for role, items in disks.disks | groupby('role') %}
+          - {{ role }}: {{ items | length }}
+          {% endfor %}
+
+          ## Pools ({{ pools.pools | length }})
+
+          | Pool | Application | Size | PGs | Erasure coded |
+          |---|---|---|---|---|
+          {% for p in pools.pools | sort(attribute='name') %}
+          | {{ p.name }} | {{ p.application | default('', true) }} | {{ p.size }} | {{ p.pgNum }} | {{ p.erasureCoding }} |
+          {% endfor %}
+
+          ## Services ({{ services.services | length }})
+
+          {% for type, items in services.services | groupby('type') %}
+          - {{ type }}: {{ items | selectattr('running') | list | length }}/{{ items | length }} running
+          {% endfor %}
+
+          ## S3 users ({{ s3_users.users | length }})
+
+          {% for u in s3_users.users | sort(attribute='uid') %}
+          - {{ u.uid }} ({{ u.name | default('', true) }}){{ ' - suspended' if u.suspended else '' }}
+          {% endfor %}
+
+    - name: Show where the report is
+      ansible.builtin.debug:
+        msg: "Report written to {{ report_dir }}/{{ inventory_hostname }}.md"

@@ -157,12 +157,14 @@ vlan:
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import find_nic, require_server
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
 
 def host_part(address):
-    return (address or "").split("/", 1)[0]
+    """The address without its prefix length, in canonical notation (IPv6 is compressed and lower case)."""
+    return normalise_ip((address or "").split("/", 1)[0])
 
 
 def managed_view(vlan):
@@ -241,7 +243,7 @@ class ServerVlanModule(CroitModule):
             self.exit(changed=True, before={}, after=after, vlan=created)
 
         before = managed_view(current)
-        changes = dict((k, p[k]) for k in ("ip", "ip6") if p[k] is not None and p[k] != before[k])
+        changes = dict((k, p[k]) for k in ("ip", "ip6") if p[k] is not None and normalise_ip(p[k]) != normalise_ip(before[k]))
         if "ip" in changes:
             self.guard_management_ip(server, current, changes["ip"] or None)
         after = dict(before)

@@ -137,3 +137,27 @@ def test_ambiguous_name(monkeypatch):
     r = run(monkeypatch, fake, server="node1", nic="eth0", notes="x")
     assert r["failed"]
     assert "use the MAC" in r["msg"]
+
+
+def test_ipv6_is_compared_in_canonical_notation(monkeypatch):
+    fake = ServerCluster(
+        servers=[server(1, "node1")],
+        nics=[nic(12, 1, "eth1", "aa:bb:cc:00:00:02", ip6="2001:db8:100::11/64")],
+    )
+    for spelling in ("2001:DB8:100::11/64", "2001:db8:100:0:0:0:0:11/64"):
+        r = run(monkeypatch, fake, server="node1", nic="eth1", ip6=spelling)
+        assert not r["changed"], spelling
+        assert_only_gets(fake)
+    r = run(monkeypatch, fake, check_mode=True, server="node1", nic="eth1", ip6="2001:db8:100::12/64")
+    assert r["changed"]
+    assert_only_gets(fake)
+
+
+def test_ipv6_management_ip_is_guarded(monkeypatch):
+    fake = ServerCluster(
+        servers=[server(1, "node1", ip="2001:db8:100::11")],
+        nics=[nic(11, 1, "eth0", "aa:bb:cc:00:00:01", ip="2001:DB8:100:0::11/64")],
+    )
+    r = run(monkeypatch, fake, server="node1", nic="eth0", ip="2001:db8:100::99/64")
+    assert r["failed"] and "management IP" in r["msg"]
+    assert not run(monkeypatch, fake, server="node1", nic="eth0", ip="2001:db8:100::11/64")["changed"]

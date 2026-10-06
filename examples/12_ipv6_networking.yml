@@ -1,0 +1,128 @@
+---
+# IPv6 (dual-stack) networking for a croit cluster.
+#
+# All addresses come from 2001:db8::/32, the IPv6 documentation prefix
+# (RFC 3849); replace them with your own allocation. 192.0.2.0/24 and
+# 198.51.100.0/24 are the matching IPv4 documentation ranges (RFC 5737).
+#
+# Addressing plan used below (one /48 for the site):
+#   2001:db8:100::/64   Ceph public network, untagged on bond0
+#   2001:db8:200::/64   Ceph internal (replication) network, VLAN 200 on bond0
+#   2001:db8:300::/56   client networks allowed to mount NFS
+#   2001:db8:100::80    S3 virtual IP, held by keepafloatd and fronted by HA Proxy
+#
+# The address modules compare IPv6 addresses in canonical form, so
+# 2001:DB8:100:0:0:0:0:11/64 and 2001:db8:100::11/64 are the same address and
+# a re-run reports no change. The croit API itself can be reached over IPv6
+# too: set croit_api_url to a bracketed literal such as https://[2001:db8:100::5].
+- name: IPv6 networking
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    public_net: 2001:db8:100::/64
+    public_gateway: "2001:db8:100::1"
+    internal_net: 2001:db8:200::/64
+    internal_vlan: 200
+    nfs_clients: 2001:db8:300::/56
+    s3_vip: "2001:db8:100::80"
+    storage_nic: bond0
+    # host_id becomes the last group of each node's addresses, for example
+    # storage-01 gets 2001:db8:100::11/64 and 2001:db8:200::11/64.
+    storage_nodes:
+      - {hostname: storage-01, host_id: 11}
+      - {hostname: storage-02, host_id: 12}
+      - {hostname: storage-03, host_id: 13}
+    s3_gateways:                 # servers that hold the VIP and run HA Proxy
+      - {server: storage-01, nic: bond0}
+      - {server: storage-02, nic: bond0}
+      - {server: storage-03, nic: bond0}
+    nfs_cluster: nfs-office
+    cephfs_volume: cephfs
+    # Binding Ceph daemons to IPv6 only restarts their messengers. Leave this
+    # false on a running dual-stack cluster; enable it for a new IPv6-only one.
+    ceph_ipv6_only: false
+  tasks:
+    - name: Ceph public network, with an IPv6 default gateway
+      croit.ceph.network:
+        cidr: "{{ public_net }}"
+        type: ceph_public
+        gateway: "{{ public_gateway }}"
+        description: Ceph public network (IPv6), bond0
+
+    - name: Ceph internal network with jumbo frames
+      croit.ceph.network:
+        cidr: "{{ internal_net }}"
+        type: ceph_internal
+        mtu: 9000
+        description: Ceph replication network (IPv6), VLAN {{ internal_vlan }}
+
+    - name: Public IPv6 address on each node's bond
+      croit.ceph.server_nic:
+        server: "{{ item.hostname }}"
+        nic: "{{ storage_nic }}"
+        ip6: "{{ public_net | regex_replace('::/64$', '::') }}{{ item.host_id }}/64"
+      loop: "{{ storage_nodes }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+
+    - name: Internal IPv6 address on a VLAN of the bond
+      croit.ceph.server_vlan:
+        server: "{{ item.hostname }}"
+        nic: "{{ storage_nic }}"
+        vlan: "{{ internal_vlan }}"
+        ip6: "{{ internal_net | regex_replace('::/64$', '::') }}{{ item.host_id }}/64"
+      loop: "{{ storage_nodes }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+
+    - name: S3 on an IPv6 virtual IP behind HA Proxy
+      croit.ceph.ha_group:
+        name: s3-frontend-v6
+        service: rgw
+        backend: keepafloatd
+        vips: ["{{ s3_vip }}"]
+        servers: "{{ s3_gateways }}"
+        haproxy: true
+        haproxy_port: 443
+        backend_servers: "{{ s3_gateways | map(attribute='server') | list }}"
+      register: s3_ha
+
+    - name: Export a CephFS directory to the IPv6 client networks
+      croit.ceph.nfs_export:
+        cluster: "{{ nfs_cluster }}"
+        nfs_path: /shared
+        path: /volumes/_nogroup/shared
+        volume: "{{ cephfs_volume }}"
+        access:
+          - subnet: "{{ nfs_clients }}"
+            rw: true
+          - subnet: "2001:db8:300:ff::25"     # a single host, read-only
+            rw: false
+
+    - name: Bind Ceph daemons to IPv6 only
+      croit.ceph.ceph_config:
+        section: global
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+      loop:
+        - {name: ms_bind_ipv6, value: true}
+        - {name: ms_bind_ipv4, value: false}
+      loop_control:
+        label: "{{ item.name }}={{ item.value }}"
+      when: ceph_ipv6_only | bool
+
+    - name: Read the IPv6 networks back
+      croit.ceph.network_info:
+      register: networks
+
+    - name: Show the networks and the S3 endpoint
+      ansible.builtin.debug:
+        msg:
+          networks: "{{ networks.networks | map(attribute='cidr') | select('string') | select('search', ':') | list }}"
+          s3_endpoint: "https://[{{ s3_vip }}]/"
+          vip_holders: "{{ s3_ha.ha_group.vipHolders | default([]) }}"

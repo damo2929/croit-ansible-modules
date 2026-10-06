@@ -1,0 +1,72 @@
+---
+# Onboard an S3 tenant: user with quotas, an access key from Vault, and a
+# versioned bucket with a read-only policy for a partner.
+- name: Onboard an S3 tenant
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    tenant_uid: acme
+    tenant_name: ACME Corp
+    tenant_email: storage@acme.example
+    tenant_access_key: ACMEACCESSKEY0001
+    tenant_buckets:
+      - {name: acme-backups, quota: 5T}
+      - {name: acme-logs, quota: 1T}
+    partner_principal: "arn:aws:iam:::user/partner"
+  tasks:
+    - name: S3 user with quotas
+      croit.ceph.s3_user:
+        uid: "{{ tenant_uid }}"
+        display_name: "{{ tenant_name }}"
+        email: "{{ tenant_email }}"
+        user_quota:
+          enabled: true
+          max_size: 10T
+        bucket_quota:
+          enabled: true
+          max_objects: 5000000
+
+    - name: Access key (secret from Vault)
+      croit.ceph.s3_user_key:
+        uid: "{{ tenant_uid }}"
+        access_key: "{{ tenant_access_key }}"
+        secret_key: "{{ vault_acme_s3_secret }}"
+      no_log: true
+
+    - name: Versioned buckets with quotas
+      croit.ceph.s3_bucket:
+        name: "{{ item.name }}"
+        owner: "{{ tenant_uid }}"
+        versioning: enabled
+        quota:
+          enabled: true
+          max_size: "{{ item.quota }}"
+      loop: "{{ tenant_buckets }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Read-only access to the backups for a partner
+      croit.ceph.s3_bucket:
+        name: acme-backups
+        policy:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal: {AWS: ["{{ partner_principal }}"]}
+              Action: ["s3:GetObject", "s3:ListBucket"]
+              Resource: ["arn:aws:s3:::acme-backups", "arn:aws:s3:::acme-backups/*"]
+
+    - name: Read the tenant back
+      croit.ceph.s3_user_info:
+        uids: ["{{ tenant_uid }}"]
+        include_buckets: true
+      register: tenant
+
+    - name: Show the tenant
+      ansible.builtin.debug:
+        msg: "{{ tenant.users[0].uid }} owns {{ tenant.users[0].buckets | default([]) | length }} bucket(s)"

@@ -1,0 +1,41 @@
+---
+# Health gate: fail early when Ceph is not healthy.
+# Use it on its own, or import it at the start of any change playbook:
+#   - ansible.builtin.import_playbook: 01_cluster_health.yml
+- name: Check croit and Ceph health
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    # Health checks that are acceptable during planned work.
+    health_ignored_checks: [OSDMAP_FLAGS]
+  tasks:
+    - name: Read the cluster status and versions
+      croit.ceph.cluster_info:
+        gather: [status, version, releases]
+      register: cluster
+
+    - name: Collect the active Ceph health checks
+      ansible.builtin.set_fact:
+        health_status: "{{ (cluster.status.cephStatus | default({}, true)).health.status | default('HEALTH_UNKNOWN') }}"
+        health_checks: >-
+          {{ ((cluster.status.cephStatus | default({}, true)).health.checks | default({}))
+             | dict2items | map(attribute='key') | reject('in', health_ignored_checks) | list }}
+
+    - name: Show the summary
+      ansible.builtin.debug:
+        msg:
+          - "croit {{ cluster.version }}"
+          - "Ceph health {{ health_status }}"
+          - "Active checks: {{ health_checks | join(', ') if health_checks else 'none' }}"
+
+    - name: Fail unless the cluster is healthy
+      ansible.builtin.assert:
+        that:
+          - health_checks | length == 0
+        fail_msg: "Ceph reports {{ health_status }} with {{ health_checks | join(', ') }}; fix the cluster before changing it"
+        success_msg: Ceph is healthy

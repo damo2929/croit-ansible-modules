@@ -6,6 +6,7 @@ Thanks for helping. This collection holds itself to a strict standard, because i
 
 - Read [AGENTS.md](AGENTS.md). It is the rulebook for every change, whether it comes from a person or an AI agent: EL9 compatibility, the idempotency and check-mode contract, the safety flags, the documentation standard and the definition of done.
 - Read [DESIGN.md](DESIGN.md) for the architecture and the decisions log.
+- Reuse before you write: ansible-core `module_utils` first, then the Python standard library, then this collection's `plugins/module_utils`. Don't duplicate code that already exists (see AGENTS.md).
 - For a new module, check [PLAN.md](PLAN.md), and open an issue to agree the design before writing code.
 
 ## Workflow

@@ -1,0 +1,35 @@
+---
+# Start slow croit work without blocking, do other things, then wait for it.
+- name: Start long jobs and wait for them later
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  tasks:
+    - name: Create an 8+3 erasure coded pool on HDDs (don't wait)
+      croit.ceph.pool:
+        name: archive
+        application: rgw
+        erasure_coding: true
+        data_chunks: 8
+        parity_chunks: 3
+        device_class: hdd
+        wait: false
+      register: archive_pool
+
+    - name: Show what croit is working on
+      croit.ceph.task_info:
+      register: running
+
+    - name: List the running tasks
+      ansible.builtin.debug:
+        msg: "{{ running.tasks | map(attribute='name') | list }}"
+
+    - name: Wait for the pool creation to finish
+      croit.ceph.task:
+        task_id: "{{ archive_pool.task.id }}"
+        wait_timeout: 3600
+      when: archive_pool.task is defined and not archive_pool.task.done

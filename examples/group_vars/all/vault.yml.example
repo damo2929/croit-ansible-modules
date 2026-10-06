@@ -1,0 +1,8 @@
+---
+# Copy to vault.yml, fill in, then encrypt it:
+#   ansible-vault encrypt group_vars/all/vault.yml
+vault_croit_api_token: CHANGE_ME
+vault_acme_s3_secret: CHANGE_ME
+vault_acme_s3_secret_v2: CHANGE_ME
+vault_monitoring_password: CHANGE_ME
+vault_smb_alice_password: CHANGE_ME

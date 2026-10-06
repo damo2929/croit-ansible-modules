@@ -13,8 +13,6 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
-import ipaddress
-
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
 
 TYPE_SIMPLE = "simple"
@@ -78,17 +76,6 @@ def require_managed_accounts(croit_module, config, what):
             "Active Directory (this one is %s, generation %s)"
             % (config.get("description"), what, config.get("type"), generation(config))
         )
-
-
-def normalise_ip(value):
-    """An IP or IP/prefix in canonical notation; anything unparsable is returned unchanged."""
-    text = str(value).strip()
-    try:
-        if "/" in text:
-            return str(ipaddress.ip_interface(text))
-        return str(ipaddress.ip_address(text))
-    except ValueError:
-        return text
 
 
 def options_view(options):

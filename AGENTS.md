@@ -29,6 +29,12 @@ These are instructions for AI agents (and humans) working in this repository: th
 - **Never auto-confirm croit's ignorable warnings** unless the user set `ignore_warnings: true`. The one exception: an explicit safety flag for the same risk may confirm the matching warning, with `write(..., confirm_warnings=True)`.
 - **No destructive recreate.** A change to an immutable or create-only field fails clearly. It is never a delete-and-create.
 - **Safety flags are checked before any request, in check mode too.** See "Safety and semantics".
+- **Reuse Ansible as much as possible; don't duplicate code you don't need to.** Before writing a helper, look for existing code, in this order:
+  1. ansible-core `module_utils` (e.g. `urls`, `basic`, `common.text.converters`, `common.network`, `common.dict_transformations`);
+  2. the Python standard library (e.g. `ipaddress`), which is also what upstream Ansible filters often call;
+  3. this collection's `plugins/module_utils`.
+
+  Modules can't import other collections' filter, test or `plugin_utils` code (AnsiballZ only bundles `module_utils`), and a dependency on another collection or a third-party library needs the maintainer's agreement. When nothing reusable exists, write the helper once in `plugins/module_utils`, never in a module.
 - **Reuse `plugins/module_utils`.** Never duplicate HTTP, task polling, diff, lookup or parsing logic in a module.
 
 ## Safety and semantics (match the existing modules exactly)
@@ -132,7 +138,8 @@ When the spec doesn't settle a behaviour (response shape, null vs 0, whether a P
 | change architecture, shared options, module_utils behaviour or the contract | DESIGN.md, including a new row in the **Decisions log** |
 | change requirements, install steps, auth or usage | README.md, and `docs/docsite/rst/guide_getting_started.rst` |
 | add or change a safety flag, secret handling or task/warning behaviour | `guide_safety.rst`, `guide_secrets.rst` or `guide_tasks_and_warnings.rst`, and the README safety table |
-| add or change any example (README, guides or module) | run `python tools/check_docs.py` |
+| add or change any example (README, guides, module or `examples/` playbooks) | run `python tools/check_docs.py` and `ansible-lint --profile production` |
+| add a module that fits a common workflow | consider adding or extending a playbook in `examples/`, and update `examples/README.md` |
 | add an integration variable | `tests/integration/integration_config.yml.template` |
 | make an unverified API assumption | the module `notes` and the PLAN.md assumptions list |
 | change workflow, rules or tooling for contributors | AGENTS.md and CONTRIBUTING.md |
@@ -155,6 +162,7 @@ A change that leaves any of these files inaccurate is incomplete.
   | `rgw.py` | S3 quotas (-1 means unlimited) |
   | `crush.py` | CRUSH rule parsing |
   | `iscsi.py`, `nvmeof.py`, `smb.py` | gateway lookups |
+  | `ip.py` | stdlib-`ipaddress` `ip_address`, `ip_interface`, `ip_network`, `normalise_ip`, `normalise_network` (same code as `ansible.utils.ipv6form`) |
   | `client.py` | `path_join` for URL-safe paths |
 
   If two modules need the same logic, move it into `module_utils` with unit tests. Modules can't import each other, because AnsiballZ only bundles `module_utils`.
@@ -180,9 +188,21 @@ A change that leaves any of these files inaccurate is incomplete.
   - No blank line goes between a decorator and its function.
   - No trailing blank lines.
   - Run sanity after moving code between files.
+- **Reserved pytest names.** Never name a test helper `setup`, `teardown`, `setup_module` or `setup_function`. The older pytest in the ansible-core 2.14–2.16 test containers runs a module-level `setup` as a nose-style hook (passing the module object), while pytest 8 doesn't, so only CI on old cores fails. Reproduce CI with `ansible-test units --docker default` on those cores, not just the newest one.
 - **pylint false positives.** `dict(base, key=...)` gives `repeated-keyword`; build the dict and `update()` it instead. The older pylint on 2.14 rejects `-(-x // y)` on a value that may be `None`, so use `ceil_mib` or explicit integer maths.
 - **`tools/` scripts** must not use `urlopen` (2.14's `replace-urlopen` check), and have no shebang (`shebang` check).
 - **EL9.** Code that passes on 2.20 can still fail on 2.14 with Python 3.9. Run the EL9 container before calling a change done.
+- **Example playbooks** (`examples/`):
+  - parameterise them through `vars:` at the top;
+  - use `module_defaults` with `group/croit.ceph.all` and the `croit_*` vars from `group_vars/all/croit.yml`;
+  - put secrets only in `vault_*` variables, with `no_log: true` where they pass through;
+  - guard anything that reboots or destroys behind an explicit `-e ..._confirm=true` assert;
+  - write generated files (reports, keyrings, tokens) only to git-ignored directories, with restrictive modes.
+- **IP addresses.**
+  - Parse and compare addresses only with `module_utils/ip.py` (`normalise_ip`, `normalise_network`, `ip_interface`, ...), never raw strings or a private `ipaddress` wrapper: croit may report `2001:db8::1/64` for `2001:DB8:0::1/64`.
+  - Docs, examples and tests use documentation ranges only: `2001:db8::/32` (IPv6), `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` (IPv4) or private ranges.
+  - URLs with an IPv6 literal need brackets (`https://[2001:db8::5]/api`).
+  - Modules cannot import filter or `plugin_utils` code from other collections (e.g. `ansible.utils.ipv6form`): AnsiballZ only bundles `module_utils`. Call the underlying stdlib code instead.
 - **Return values and the `wait` fragment.** The `.wait` fragment refers to `RV(task)`; a module that returns several tasks must still return `task` (the last one).
 
 ## Commands

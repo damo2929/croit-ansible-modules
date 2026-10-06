@@ -294,9 +294,8 @@ task:
       sample: "done"
 """
 
-import ipaddress
-
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import list_servers, require_server, resolve_interface
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
@@ -338,16 +337,6 @@ WRITE_FIELDS = (
     "evictNfsClientsOnFailback",
     "tuning",
 )
-
-
-def normalise_ip(value):
-    text = str(value).strip()
-    try:
-        if "/" in text:
-            return str(ipaddress.ip_interface(text))
-        return str(ipaddress.ip_address(text))
-    except ValueError:
-        return text
 
 
 def member_key(member):

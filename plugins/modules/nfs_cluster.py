@@ -287,22 +287,10 @@ task:
       sample: "Deploying NFS gateway on node1 ... done"
 """
 
-import ipaddress
-
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import normalise_ip
 from ansible_collections.croit.ceph.plugins.module_utils.lookup import find_one, require_server, resolve_interface
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
-
-
-def normalise_vip(value):
-    """Canonical text for a VIP with or without prefix length; unparsable values compare verbatim."""
-    text = str(value).strip()
-    try:
-        if "/" in text:
-            return str(ipaddress.ip_interface(text))
-        return str(ipaddress.ip_address(text))
-    except ValueError:
-        return text
 
 
 class NfsClusterModule(CroitModule):
@@ -387,7 +375,7 @@ class NfsClusterModule(CroitModule):
     def desired_vips(self):
         if self.params["vips"] is None:
             return None
-        return sorted(set(normalise_vip(v) for v in self.params["vips"]))
+        return sorted(set(normalise_ip(v) for v in self.params["vips"]))
 
     def desired_interfaces(self):
         if self.params["vip_interfaces"] is None:
@@ -524,7 +512,7 @@ class NfsClusterModule(CroitModule):
                 self.module.fail_json(msg="vips and vip_interfaces need implementation=croit_nfs; nfs-ganesha uses croit.ceph.ha_group")
             ha = self.get(path_join("services", "nfs-gateways", service_id, "ha")) or {}
             result["ha"] = ha
-            current_vips = sorted(set(normalise_vip(v) for v in ha.get("vips") or []))
+            current_vips = sorted(set(normalise_ip(v) for v in ha.get("vips") or []))
             current_ifaces = sorted(
                 set(
                     (m.get("server"), m.get("nic"), m.get("vlan"))

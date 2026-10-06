@@ -1,0 +1,48 @@
+---
+# A Windows file share on an existing (generation 2, non-AD) croit SMB cluster.
+- name: SMB share with local users
+  hosts: croit
+  gather_facts: false
+  module_defaults:
+    group/croit.ceph.all:
+      api_url: "{{ croit_api_url }}"
+      api_token: "{{ croit_api_token }}"
+      validate_certs: "{{ croit_validate_certs }}"
+  vars:
+    smb_cluster: office-smb
+    cephfs_volume: cephfs
+  tasks:
+    - name: Local group for the finance team
+      croit.ceph.smb_group:
+        cluster: "{{ smb_cluster }}"
+        name: finance
+
+    - name: Local user in that group
+      croit.ceph.smb_user:
+        cluster: "{{ smb_cluster }}"
+        name: alice
+        password: "{{ vault_smb_alice_password }}"
+        update_password: on_create
+        groups: [finance]
+
+    - name: Share for the finance team
+      croit.ceph.smb_share:
+        cluster: "{{ smb_cluster }}"
+        name: finance
+        volume: "{{ cephfs_volume }}"
+        path: /volumes/teams/finance
+        acl_mode: windows
+        grants:
+          - {group: finance, access: read_write}
+
+    - name: Read the cluster back
+      croit.ceph.smb_info:
+        cluster: "{{ smb_cluster }}"
+        gather: [shares, users]
+      register: smb
+
+    - name: Show shares and users
+      ansible.builtin.debug:
+        msg:
+          shares: "{{ smb.clusters[0].shares | default([]) | map(attribute='share') | list }}"
+          users: "{{ smb.clusters[0].users | default([]) | map(attribute='username') | list }}"

@@ -7,3 +7,8 @@ tests/integration/integration_config.yml
 changelogs/.plugin-cache.yaml
 .pytest_cache/
 .ansible/
+# examples/: secrets and generated output
+examples/group_vars/all/vault.yml
+examples/reports/
+examples/keyrings/
+examples/tokens/

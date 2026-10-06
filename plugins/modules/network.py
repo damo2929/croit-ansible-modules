@@ -191,11 +191,10 @@ network:
       sample: 192.168.100.200
 """
 
-import ipaddress
-
 from ansible.module_utils.common.text.converters import to_text
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
+from ansible_collections.croit.ceph.plugins.module_utils.ip import ip_address, ip_interface, ip_network
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule
 
 DEFAULT_MTU = 1500
@@ -213,10 +212,10 @@ FIELDS = dict(
 
 
 def network_of(item):
-    """The ip_network a NetworkInfo describes, or None if croit's row is unusable."""
+    """The network a NetworkInfo describes, or None if croit's row is unusable."""
     try:
-        return ipaddress.ip_network(u"%s/%s" % (to_text(item.get("ip")), item.get("netmask")), strict=False)
-    except (ValueError, TypeError):
+        return ip_network(u"%s/%s" % (to_text(item.get("ip")), item.get("netmask")))
+    except ValueError:
         return None
 
 
@@ -224,7 +223,7 @@ def norm_ip(value):
     """Canonical text of an address; '' and None mean unset."""
     if value in (None, ""):
         return None
-    return str(ipaddress.ip_address(to_text(value).strip()))
+    return str(ip_address(to_text(value)))
 
 
 def normalised(item):
@@ -264,7 +263,7 @@ class NetworkModule(CroitModule):
 
     def parse_cidr(self):
         try:
-            interface = ipaddress.ip_interface(to_text(self.params["cidr"]).strip())
+            interface = ip_interface(to_text(self.params["cidr"]))
         except ValueError as e:
             self.module.fail_json(msg="cidr: %s" % e)
         if "/" not in self.params["cidr"]:
@@ -287,7 +286,7 @@ class NetworkModule(CroitModule):
                 desired[opt] = norm_ip(desired[opt])
             except ValueError as e:
                 self.module.fail_json(msg="%s: %s" % (opt, e))
-            if desired[opt] is not None and ipaddress.ip_address(desired[opt]) not in network:
+            if desired[opt] is not None and ip_address(desired[opt]) not in network:
                 self.module.fail_json(msg="%s %s is not inside %s" % (opt, desired[opt], network))
         if (desired.get("dhcp_pool_start") is None) != (desired.get("dhcp_pool_end") is None):
             self.module.fail_json(msg="dhcp_pool_start and dhcp_pool_end must both be set or both be empty")
@@ -347,7 +346,7 @@ class NetworkModule(CroitModule):
         if self.check_mode:
             self.exit(changed=True, before=before, after=after, network=current)
         # Keep croit's stored address for the network rather than replacing it with the CIDR's.
-        stored = ipaddress.ip_interface(u"%s/%s" % (to_text(current["ip"]), current["netmask"]))
+        stored = ip_interface(u"%s/%s" % (to_text(current["ip"]), current["netmask"]))
         self.write("PUT", path_join("networks", current["id"]), body=self.request_body(stored, after))
         self.exit(changed=True, before=before, after=after, network=self.find(network) or {})
 

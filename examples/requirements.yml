@@ -1,0 +1,8 @@
+---
+collections:
+  - name: croit.ceph
+    version: ">=0.1.0"
+  # Until croit.ceph is published on Galaxy, install it from git instead:
+  # - name: https://github.com/damo2929/croit-ansible-modules.git
+  #   type: git
+  #   version: main

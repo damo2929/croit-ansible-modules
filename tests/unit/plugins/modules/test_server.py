@@ -130,6 +130,15 @@ def test_ip_must_be_assigned(monkeypatch):
     assert_only_gets(fake)
 
 
+def test_ipv6_management_ip_in_any_notation(monkeypatch):
+    fake = ServerCluster(servers=[server(1, "node1", ip="2001:db8:100::11", ips=["2001:db8:100::11", "2001:db8:200::11"])])
+    assert not run(monkeypatch, fake, server="node1", ip="2001:DB8:100:0:0:0:0:11")["changed"]
+    assert_only_gets(fake)
+    r = run(monkeypatch, fake, check_mode=True, server="node1", ip="2001:DB8:200::11")
+    assert r["changed"]
+    assert_only_gets(fake)
+
+
 def test_delete_requires_confirmation(monkeypatch):
     fake = cluster()
     r = run(monkeypatch, fake, server="node1", state="absent")
