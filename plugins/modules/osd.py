@@ -41,6 +41,23 @@ attributes:
     support: full
   diff_mode:
     support: full
+notes:
+  - Creating or replacing an OSD B(erases the target disk) and is refused without O(confirm_wipe=true),
+    also in check mode.
+  - Marking an OSD out (O(in=false)) starts moving its data to the other OSDs, which loads the cluster.
+seealso:
+  - module: croit.ceph.disk_info
+    description: Find unassigned disks to create OSDs on.
+  - module: croit.ceph.osd_flag
+    description: Set C(noout) before stopping OSDs for maintenance.
+  - module: croit.ceph.service
+    description: Restart OSDs, or roll a restart across a host.
+  - name: Ceph OSD operations
+    description: Adding, removing and replacing OSDs in Ceph.
+    link: https://docs.ceph.com/en/latest/rados/operations/add-or-rm-osds/
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -105,30 +122,38 @@ options:
   confirm_wipe:
     description:
       - Must be V(true) to create or replace an OSD, because the target disk is erased.
+      - Checked before anything is sent, also in check mode.
     type: bool
     default: false
 """
 
 EXAMPLES = r"""
-- name: Create an OSD on a disk identified by serial number
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create an OSD on a disk identified by serial number (ERASES the disk)
   croit.ceph.osd:
     server: storage-01
     disk: ZL2ABC12
     device_class: hdd
     db_disk: /dev/nvme0n1
     confirm_wipe: true
+  register: new_osd
 
-- name: Take an OSD out before maintenance
+- name: Show the new OSD's id
+  ansible.builtin.debug:
+    msg: "Created osd.{{ new_osd.osd.id }} on disk {{ new_osd.disk.serial }}"
+
+- name: Take an OSD out before maintenance (its data moves to the other OSDs)
   croit.ceph.osd:
     osd_id: 12
     in: false
 
-- name: Stop and start an OSD
+- name: Stop an OSD
   croit.ceph.osd:
     osd_id: 12
     running: false
 
-- name: Move osd.12 to a new disk, keeping its id
+- name: Move osd.12 to a new disk, keeping its id (ERASES /dev/sdk)
   croit.ceph.osd:
     server: storage-01
     disk: /dev/sdk
@@ -146,41 +171,114 @@ osd:
   contains:
     id:
       description: OSD id.
+      returned: when the OSD exists
       type: int
+      sample: 12
     server:
       description: Id of the server it runs on.
+      returned: when the OSD exists
       type: int
+      sample: 1
     disk:
       description: Id of croit's disk record it runs on.
+      returned: when the OSD exists
       type: int
+      sample: 31
     in:
       description: Whether CRUSH places data on it (reweight above 0).
+      returned: when the OSD exists
       type: bool
+      sample: true
     running:
       description: Whether ceph reports it up.
+      returned: when the OSD exists
       type: bool
+      sample: true
     status:
       description: What ceph says about it, V(UP), V(DOWN), V(DESTROYED) or V(UNKNOWN).
+      returned: when the OSD exists
       type: str
+      sample: UP
     reweight:
       description: The OSD's reweight.
+      returned: when the OSD exists
       type: float
+      sample: 1.0
     device_class:
       description: CRUSH device class.
+      returned: when the OSD exists
       type: str
+      sample: hdd
 disk:
   description: The disk the OSD is on (C(DiskResponse) in the croit API), when a disk was named.
   returned: when O(disk) is set
   type: dict
+  contains:
+    id:
+      description: croit's numeric disk id.
+      returned: always
+      type: int
+      sample: 31
+    path:
+      description: Device path on the node.
+      returned: always
+      type: str
+      sample: /dev/sdk
+    serial:
+      description: Serial number.
+      returned: always
+      type: str
+      sample: ZL2ABC12
+    role:
+      description: What the disk is used for; V(osd) once the OSD exists.
+      returned: always
+      type: str
+      sample: osd
+    osdId:
+      description: Id of the OSD on the disk, or null.
+      returned: always
+      type: int
+      sample: 12
 task:
-  description: The last croit background task the change ran as.
+  description: The last croit background task the change ran as (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 tasks:
   description: Every croit background task the change ran as (creating OSDs runs one task per server).
   returned: when tasks ran
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Create OSDs
+      state: FINISHED
+      done: true
 """
 
 import time

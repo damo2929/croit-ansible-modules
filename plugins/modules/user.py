@@ -20,10 +20,13 @@ module: user
 short_description: Manage local croit users
 version_added: 0.1.0
 description:
-  - Create, update and delete local croit accounts (the ones that log in with a password).
+  - Creates, updates and deletes local croit accounts, the ones that log in with a password. A user is
+    identified by O(username).
+  - Roles are compared as a set and only written when they differ. Options left unset, such as O(roles) on an
+    existing user, are left alone.
   - LDAP and OIDC users are managed by their directory or identity provider; this module refuses to touch them.
-  - The account that the API token in use belongs to is never deleted or stripped of the admin role,
-    so a playbook cannot lock its own operator out.
+  - The account the API token in use belongs to is never deleted or stripped of the admin role, so a playbook
+    cannot lock its own operator out.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -39,28 +42,31 @@ attributes:
 options:
   username:
     description:
-      - Login name of the user.
+      - Login name of the user, which identifies the account.
     type: str
     required: true
     aliases: [name]
   state:
     description:
-      - Whether the user should exist.
+      - V(present) creates the user or updates its roles and password.
+      - V(absent) deletes the user. A user that does not exist is left alone.
     type: str
     choices: [present, absent]
     default: present
   roles:
     description:
-      - The complete set of roles of the user. Order does not matter.
+      - The complete set of roles of the user. Order and duplicates do not matter.
       - Required when the user is created. When not set, an existing user's roles are left alone.
-      - V(admin) needs V(viewer) as well, as croit requires.
+      - Must not be empty, and V(admin) needs V(viewer) as well, as croit requires. Both are checked before
+        anything is written, in check mode too.
     type: list
     elements: str
     choices: [admin, viewer, securefolder]
   password:
     description:
-      - Password of the user. croit stores only a bcrypt hash, so it cannot be compared.
-      - A user created without a password cannot log in until one is set.
+      - Password of the user. croit stores only a hash, so it cannot be compared; O(update_password) decides when
+        it is sent.
+      - A user created without a password cannot log in until one is set; the module warns about this.
       - Setting a password ends every session the user holds.
     type: str
   update_password:
@@ -72,14 +78,35 @@ options:
     default: on_create
 notes:
   - croit itself refuses to delete the last local admin account or to take the admin role away from it.
+  - The lockout guard compares the user with the identity croit reports for the API token in use
+    (C(/auth/token-info)).
+seealso:
+  - module: croit.ceph.api_token
+    description: Manage the API tokens automation should use instead of user passwords.
+  - module: croit.ceph.oidc_provider
+    description: Let users log in through an OpenID Connect identity provider.
+  - name: croit API reference
+    description: The C(/users) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
-- name: Read-only operator
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+- name: Read-only operator for monitoring
   croit.ceph.user:
     username: monitoring
     roles: [viewer]
     password: "{{ vault_monitoring_password }}"
+  register: monitoring_user
+
+- name: Show the account id croit assigned
+  ansible.builtin.debug:
+    msg: "monitoring has id {{ monitoring_user.user.id }}"
+
+- name: Make alice an administrator
+  croit.ceph.user:
+    username: alice
+    roles: [admin, viewer]
 
 - name: Rotate a password
   croit.ceph.user:
@@ -96,15 +123,33 @@ EXAMPLES = r"""
 RETURN = r"""
 user:
   description:
-    - The user as croit reports it after the change (C(Account) in the croit API).
-    - Before the change in check mode; empty when the user does not exist.
+    - The user as croit reports it after the change (C(Account) in the croit API). It never contains the
+      password.
+    - In check mode, the user before the change. Empty when the user does not exist.
   returned: always
   type: dict
-  sample:
-    id: 4
-    username: monitoring
-    roles: [viewer]
-    authScheme: password
+  contains:
+    id:
+      description: croit's id of the account.
+      returned: when the user exists
+      type: int
+      sample: 4
+    username:
+      description: Login name.
+      returned: when the user exists
+      type: str
+      sample: monitoring
+    roles:
+      description: Every role the account holds.
+      returned: when the user exists
+      type: list
+      elements: str
+      sample: [viewer]
+    authScheme:
+      description: How the account authenticates; C(password) for the accounts this module manages.
+      returned: when the user exists
+      type: str
+      sample: password
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -19,8 +19,11 @@ module: mgr_module
 short_description: Enable, disable and configure Ceph manager modules on a croit cluster
 version_added: 0.1.0
 description:
-  - Enables or disables one Ceph manager module and sets its options through the croit API.
-  - Only the options listed in O(options) are managed; every other option keeps its value.
+  - Enables or disables one Ceph manager module and sets its options through the croit API. The module
+    is identified by its O(name); an unknown name fails the task and lists the modules ceph has.
+  - Only the options listed in O(options) are managed; every other option keeps its value. When
+    O(enabled) is not set, the module is left enabled or disabled as it is. Changed options are applied
+    before the module is enabled or disabled.
   - The balancer and the dashboard go through croit's own handling when enabled. Enabling the balancer
     turns it on in upmap mode and raises the cluster's minimum client release to luminous when needed;
     croit asks first when older clients are connected, see O(ignore_warnings). Enabling the dashboard
@@ -56,15 +59,37 @@ options:
       - Values are compared as the text ceph stores; booleans are compared case-insensitively.
       - Unknown option names fail the task and list the options the module has.
     type: dict
+notes:
+  - It is assumed that, for V(balancer), croit reports C(enabled) as whether the balancer is active
+    rather than whether the manager module is loaded. If it does not, every run will report a change.
+    This has not been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.cluster_tuning
+    description: Cluster-wide tuning such as recovery speed and full ratios.
+  - module: croit.ceph.ceph_config
+    description: Set Ceph configuration options outside manager modules.
+  - name: croit API reference
+    description: The croit REST API, including the C(/modules) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: Ceph manager modules
+    description: Upstream documentation of the Ceph manager and its modules.
+    link: https://docs.ceph.com/en/latest/mgr/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Enable the prometheus exporter on port 9283
   croit.ceph.mgr_module:
     name: prometheus
     enabled: true
     options:
       server_port: 9283
+  register: prometheus
+
+- name: Show what ceph says about the module
+  ansible.builtin.debug:
+    msg: "prometheus enabled={{ prometheus.module.enabled }}, can run={{ prometheus.module.canRun }}"
 
 - name: Turn on the balancer (upmap)
   croit.ceph.mgr_module:
@@ -77,21 +102,50 @@ EXAMPLES = r"""
     name: pg_autoscaler
     options:
       sleep_interval: null
+
+- name: Disable a module
+  croit.ceph.mgr_module:
+    name: influx
+    enabled: false
 """
 
 RETURN = r"""
 module:
-  description: The module as croit reports it after the change (C(CephModuleResponse) in the croit API).
+  description:
+    - The manager module as croit reports it after the change (C(CephModuleResponse) in the croit API);
+      before the change in check mode.
   returned: always
   type: dict
-  sample:
-    name: prometheus
-    enabled: true
-    alwaysOn: false
-    canRun: true
+  contains:
+    name:
+      description: The module's name.
+      returned: always
+      type: str
+      sample: prometheus
+    enabled:
+      description: Whether the module is enabled.
+      returned: always
+      type: bool
+      sample: true
+    alwaysOn:
+      description: Whether ceph runs the module unconditionally.
+      returned: always
+      type: bool
+      sample: false
+    canRun:
+      description: Whether ceph could run the module, or null where ceph does not say.
+      returned: always
+      type: bool
+      sample: true
+    errorString:
+      description: What ceph says is stopping the module from running, if anything.
+      returned: always
+      type: str
+      sample: null
 options:
   description:
-    - The values of the options listed in O(options) after the change, keyed by option name.
+    - The values of the options listed in O(options), keyed by option name, as the text ceph stores.
+      After the change; before it in check mode. A cleared option is null.
   returned: when O(options) is set
   type: dict
   sample:
@@ -100,6 +154,32 @@ task:
   description: The croit background task enabling or disabling the module ran as, when croit answered one.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: The task's id; use it with M(croit.ceph.task) or M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Enable manager module
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript. Empty while the task is listed without it.
+      returned: always
+      type: str
+      sample: Creating pools...
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

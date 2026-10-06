@@ -19,6 +19,8 @@ short_description: Read NFS gateway clusters, their exports and servers from a c
 version_added: 0.1.0
 description:
   - Returns croit's NFS clusters, each with its exports and the servers running it.
+  - Optionally filters by cluster O(name) and adds the croit-nfs HA view (virtual IPs, placement and Raft state).
+  - This module only reads and never changes anything, so it is safe in check mode.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -33,40 +35,104 @@ options:
   name:
     description:
       - Only return the NFS cluster with this name (its croit description).
+      - When not set, every NFS cluster is returned. A name that matches no cluster returns an empty list.
     type: str
   ha:
     description:
-      - Also read the croit-nfs HA view (virtual IPs, placement, Raft state) of every croit-nfs cluster returned.
+      - Also read the croit-nfs HA view (virtual IPs, placement and Raft state) of every croit-nfs cluster returned.
+      - nfs-ganesha clusters never get an HA view; their floating IPs are read with M(croit.ceph.ha_group).
     type: bool
     default: false
+seealso:
+  - module: croit.ceph.nfs_cluster
+    description: Manage NFS clusters.
+  - module: croit.ceph.nfs_export
+    description: Manage the exports of an NFS cluster.
+  - name: croit API reference
+    description: The croit REST API this module uses (NFS gateways).
+    link: https://www.croit.io/api-docs
+  - name: CephFS and NFS
+    description: Upstream Ceph documentation on exporting CephFS over NFS.
+    link: https://docs.ceph.com/en/latest/cephfs/nfs/
 """
 
 EXAMPLES = r"""
-- name: All NFS clusters with their exports
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Read all NFS clusters with their exports
   croit.ceph.nfs_info:
   register: nfs
 
-- name: One cluster, including its virtual IPs
+- name: List the exported paths of every cluster
+  ansible.builtin.debug:
+    msg: "{{ item.name }}: {{ item.exports | map(attribute='nfsPath') | list }}"
+  loop: "{{ nfs.clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read one cluster, including its virtual IPs
   croit.ceph.nfs_info:
     name: nfs-prod
     ha: true
+  register: prod
+
+- name: Check that every member of the cluster is healthy
+  ansible.builtin.assert:
+    that: prod.clusters[0].servers | rejectattr('healthy') | list | length == 0
 """
 
 RETURN = r"""
 clusters:
   description:
-    - The NFS clusters (C(NfsGatewayConfigResponse)), each with C(name), C(exports) (C(NfsGatewayExportResponse))
-      and C(servers) (C(NfsGatewayServerResponse)) added, and C(ha) (C(CroitNfsHaView)) with O(ha=true).
+    - The NFS clusters (C(NfsGatewayConfigResponse)), each with C(name), C(exports) and C(servers) added, and C(ha) with
+      O(ha=true) for croit-nfs clusters.
   returned: always
   type: list
   elements: dict
-  sample:
-    - serviceId: 41
-      name: nfs-prod
-      description: nfs-prod
-      implementation: croit_nfs
-      exports: [{id: 7, nfsPath: /projects, path: /volumes/_nogroup/projects}]
-      servers: [{serverId: 1, hostname: node1, healthy: true}]
+  contains:
+    serviceId:
+      description: croit's id of the NFS service.
+      returned: always
+      type: int
+      sample: 41
+    name:
+      description: The cluster's name, the same as C(description).
+      returned: always
+      type: str
+      sample: nfs-prod
+    description:
+      description: The cluster's croit description.
+      returned: always
+      type: str
+      sample: nfs-prod
+    implementation:
+      description: NFS implementation serving the cluster, V(ganesha) or V(croit_nfs).
+      returned: always
+      type: str
+      sample: croit_nfs
+    exports:
+      description:
+        - The cluster's exports (C(NfsGatewayExportResponse)), each with C(id), C(nfsPath), C(path), C(volume),
+          C(access) and C(protocols).
+      returned: always
+      type: list
+      elements: dict
+      sample: [{id: 7, nfsPath: /projects, path: /volumes/_nogroup/projects, volume: null,
+                access: [{subnet: 10.0.0.0/24, rw: true}], protocols: {nfs3: false, nfs4: true}}]
+    servers:
+      description:
+        - The servers running the cluster (C(NfsGatewayServerResponse)), each with C(serverId), C(hostname), C(ip) and
+          C(healthy).
+      returned: always
+      type: list
+      elements: dict
+      sample: [{serverId: 1, hostname: node1, ip: 10.0.0.11, healthy: true}]
+    ha:
+      description:
+        - The croit-nfs HA view (C(CroitNfsHaView)) with C(vips), C(members), C(haPossible) and C(quorumHealthy).
+      returned: with O(ha=true) for croit-nfs clusters
+      type: dict
+      sample: {vips: [10.0.0.250/24], haPossible: true, quorumHealthy: true, members: []}
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

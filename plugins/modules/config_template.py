@@ -17,9 +17,10 @@ short_description: Manage croit config file templates
 version_added: 0.1.0
 description:
   - Sets one of croit's config file templates (the files croit renders onto the servers or the management
-    node) to a custom template, or to one of croit's predefined templates.
-  - croit offers a fixed set of templates; they cannot be created or deleted. To go back to croit's stock
-    template, set O(predefined) to its name.
+    node) either to custom content or to one of croit's predefined templates for that file.
+  - A template is identified by its id, O(name). croit offers a fixed set of templates; they cannot be created
+    or deleted. To go back to croit's stock template, set O(predefined) to one of the names croit offers.
+  - The module compares the requested template with what croit reports and only writes when they differ.
   - B(Caution.) Network and GRUB templates can make servers unreachable after their next boot, and saving the
     management node's NTP template restarts NTP. croit warns about these, see O(ignore_warnings).
 author:
@@ -34,56 +35,128 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows the predefined template name and the full template content.
 options:
   name:
     description:
       - The template's id, as croit lists it (C(id) in RV(template)).
+      - An unknown id fails the task and lists the template ids croit offers.
     type: str
     required: true
   content:
     description:
-      - The complete custom template.
+      - The complete custom template text.
       - Compared exactly, except that trailing newlines are ignored.
-      - Mutually exclusive with O(predefined); one of them is required.
+      - Mutually exclusive with O(predefined); exactly one of them is required.
     type: str
   predefined:
     description:
-      - Name of one of croit's predefined templates for this file (C(availableTemplates) in RV(template)).
-      - Mutually exclusive with O(content); one of them is required.
+      - Name of one of croit's predefined templates for this file, as listed in C(availableTemplates) in
+        RV(template).
+      - A name the template does not offer fails the task and lists the names it does offer.
+      - Mutually exclusive with O(content); exactly one of them is required.
     type: str
+notes:
+  - A template change only reaches a server when croit next renders the file there, which for boot-time
+    files such as network and GRUB templates is the server's next boot.
+seealso:
+  - module: croit.ceph.hook_script
+    description: Run scripts on the servers at boot and other events, instead of templating files.
+  - module: croit.ceph.ceph_config
+    description: Manage Ceph options in the monitor configuration database.
+  - name: croit API reference
+    description: The C(/config-templates) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: Custom chrony configuration for the servers
   croit.ceph.config_template:
     name: "{{ chrony_template_id }}"
-    content: "{{ lookup('ansible.builtin.file', 'chrony.conf.j2') }}"
+    content: "{{ lookup('ansible.builtin.file', 'chrony.conf') }}"
+  register: chrony
 
-- name: Back to croit's stock template
+- name: Show which stock templates croit offers for this file
+  ansible.builtin.debug:
+    msg: "{{ chrony.template.availableTemplates | map(attribute='name') | list }}"
+
+- name: Back to croit's first stock template
   croit.ceph.config_template:
     name: "{{ chrony_template_id }}"
-    predefined: default
+    predefined: "{{ chrony.template.availableTemplates[0].name }}"
 """
 
 RETURN = r"""
 template:
   description:
     - The template as croit reports it after the change (C(ConfigTemplateResponse) in the croit API).
-    - Before the change in check mode.
+    - In check mode, the template before the change.
   returned: always
   type: dict
-  sample:
-    id: chrony
-    description: Chrony configuration on the servers
-    currentTemplateName: custom
-    currentTemplate: "server ntp.example.com iburst\n"
+  contains:
+    id:
+      description: The template's id, which O(name) refers to.
+      returned: always
+      type: str
+      sample: chrony
+    description:
+      description: What file the template renders.
+      returned: always
+      type: str
+      sample: Chrony configuration on the servers
+    currentTemplateName:
+      description: Name of the predefined template in use, or a name that matches none of them for custom content.
+      returned: always
+      type: str
+      sample: custom
+    currentTemplate:
+      description: The template text in use.
+      returned: always
+      type: str
+      sample: "server ntp.example.com iburst\n"
     availableTemplates:
-      - name: default
-        template: "..."
+      description: The predefined templates croit offers for this file, each with C(name) and C(template) text.
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - name: chrony-default
+          template: "pool pool.ntp.org iburst\n"
 task:
-  description: The croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The croit background task the change ran as (C(ManagedThreadTask) in the croit API).
+    - With O(wait=true) this is the finished task. With O(wait=false) it can still be running; follow it with
+      M(croit.ceph.task).
+  returned: when the change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, which M(croit.ceph.task) and M(croit.ceph.task_info) accept.
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Set ceph config
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

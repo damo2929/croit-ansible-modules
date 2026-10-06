@@ -19,11 +19,14 @@ module: cephfs_subvolume
 short_description: Manage CephFS subvolumes on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, resize and delete CephFS subvolumes through the croit API.
+  - Create, resize and delete CephFS subvolumes through the croit API. A subvolume is identified by
+    O(volume), O(group) and O(name).
   - Only options that are set are managed; anything left out keeps its current value.
   - O(uid), O(gid), O(mode), O(pool_layout) and O(namespace_isolated) can only be set when the subvolume
-    is created. They are compared afterwards, and a difference fails the task.
+    is created. They are compared afterwards, and a difference fails the task instead of recreating the
+    subvolume.
   - A subvolume that was removed with its snapshots retained (state C(snapshot-retained)) counts as absent.
+  - Removing a subvolume deletes its data and needs O(confirm_delete=true).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -37,7 +40,7 @@ attributes:
 options:
   name:
     description:
-      - Name of the subvolume.
+      - Name of the subvolume, for example V(pvc-0042).
     type: str
     required: true
   volume:
@@ -58,52 +61,86 @@ options:
   size:
     description:
       - Quota of the subvolume, as bytes or with a binary unit such as V(100G) or V(2T).
-      - V(unlimited) (or V(0)) removes the quota.
-      - The task fails instead of shrinking the quota below what the subvolume already uses.
+      - V(unlimited) (or V(0)) removes the quota. When not set, the current quota is kept, and a new
+        subvolume is created without one.
+      - The task fails, before anything is changed, instead of shrinking the quota below what the
+        subvolume already uses.
     type: str
   uid:
     description:
-      - Owner uid of the subvolume directory. Only set on creation.
+      - Owner uid of the subvolume directory. Only set when the subvolume is created; a different value
+        on an existing subvolume fails the task.
     type: int
   gid:
     description:
-      - Owner gid of the subvolume directory. Only set on creation.
+      - Owner gid of the subvolume directory. Only set when the subvolume is created; a different value
+        on an existing subvolume fails the task.
     type: int
   mode:
     description:
-      - Permissions of the subvolume directory in octal, for example V('755'). Only set on creation.
+      - Permissions of the subvolume directory in octal, for example V('755') or V('0750'). Quote the
+        value so YAML keeps it a string.
+      - Only set when the subvolume is created; a different value on an existing subvolume fails the task.
     type: str
   pool_layout:
     description:
-      - Data pool the subvolume's data is stored in. Only set on creation.
+      - Data pool the subvolume's data is stored in. When not set, the group's or volume's data pool is used.
+      - Only set when the subvolume is created; a different value on an existing subvolume fails the task.
     type: str
   namespace_isolated:
     description:
-      - Store the subvolume in its own RADOS namespace. Only set on creation.
+      - Store the subvolume in its own RADOS namespace, so a client key can be limited to it.
+      - Only set when the subvolume is created; a different value on an existing subvolume fails the task.
     type: bool
   retain_snapshots:
     description:
       - With O(state=absent), keep the subvolume's snapshots. ceph then keeps an entry in state
-        C(snapshot-retained).
+        C(snapshot-retained), which this module treats as absent.
+      - Ignored with O(state=present).
     type: bool
     default: false
   confirm_delete:
     description:
-      - Must be V(true) for O(state=absent) to remove an existing subvolume and its data.
+      - Must be V(true) for O(state=absent) to remove an existing subvolume and its data. Without it the
+        task fails, in check mode too.
     type: bool
     default: false
+notes:
+  - It is assumed that ceph cannot change the owner, mode, data pool or namespace isolation of an
+    existing subvolume, and that ceph lists C(snapshot-retained) subvolumes and allows one to be created
+    again with the same name. Neither has been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.cephfs_subvolume_group
+    description: Manage the group a subvolume lives in.
+  - module: croit.ceph.cephfs_volume
+    description: Manage the CephFS volume.
+  - module: croit.ceph.ceph_key
+    description: Create a key limited to the subvolume's path or namespace.
+  - module: croit.ceph.snapshot_schedule
+    description: Schedule snapshots of the subvolume's directory.
+  - name: croit API reference
+    description: The croit REST API, including the C(/cephfs/subvolumes) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: CephFS subvolumes
+    description: Upstream documentation of CephFS subvolume groups and subvolumes.
+    link: https://docs.ceph.com/en/latest/cephfs/fs-volumes/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: 100 GiB subvolume in the csi group
   croit.ceph.cephfs_subvolume:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     volume: cephfs
     group: csi
     name: pvc-0042
     size: 100G
     namespace_isolated: true
+  register: pvc
+
+- name: Show the path clients mount
+  ansible.builtin.debug:
+    msg: "Mount {{ pvc.subvolume.path }}"
 
 - name: Grow it
   croit.ceph.cephfs_subvolume:
@@ -112,12 +149,13 @@ EXAMPLES = r"""
     name: pvc-0042
     size: 200G
 
-- name: Remove it and its data
+- name: Remove it and its data, keeping its snapshots
   croit.ceph.cephfs_subvolume:
     volume: cephfs
     group: csi
     name: pvc-0042
     state: absent
+    retain_snapshots: true
     confirm_delete: true
 """
 
@@ -128,13 +166,57 @@ subvolume:
     - Before the change in check mode; empty when the subvolume does not exist.
   returned: always
   type: dict
-  sample:
-    path: /volumes/csi/pvc-0042/0b6c4a8e-7c1f-4b8e-9c55-2f0a5d1b9e10
-    dataPool: cephfs.cephfs.data
-    bytesUsed: 1048576
-    quotaMaxBytes: 107374182400
-    state: complete
-    type: subvolume
+  contains:
+    path:
+      description: Absolute CephFS path of the subvolume, which clients mount.
+      returned: when the subvolume exists
+      type: str
+      sample: /volumes/csi/pvc-0042/0b6c4a8e-7c1f-4b8e-9c55-2f0a5d1b9e10
+    dataPool:
+      description: Data pool the subvolume's data is stored in.
+      returned: when the subvolume exists
+      type: str
+      sample: cephfs.cephfs.data
+    poolNamespace:
+      description: RADOS namespace of the subvolume, or null when it is not namespace isolated.
+      returned: when the subvolume exists
+      type: str
+      sample: fsvolumens_pvc-0042
+    bytesUsed:
+      description: Bytes the subvolume uses.
+      returned: when the subvolume exists
+      type: int
+      sample: 1048576
+    quotaMaxBytes:
+      description: Quota in bytes, or null when there is none.
+      returned: when the subvolume exists
+      type: int
+      sample: 107374182400
+    uid:
+      description: Owner uid of the subvolume directory.
+      returned: when the subvolume exists
+      type: int
+      sample: 0
+    gid:
+      description: Owner gid of the subvolume directory.
+      returned: when the subvolume exists
+      type: int
+      sample: 0
+    mode:
+      description: Mode of the subvolume directory as a decimal integer, including the file type bits.
+      returned: when the subvolume exists
+      type: int
+      sample: 16877
+    state:
+      description: C(complete), or C(snapshot-retained) for a subvolume removed with its snapshots kept.
+      returned: when the subvolume exists
+      type: str
+      sample: complete
+    type:
+      description: C(subvolume) or C(clone).
+      returned: when the subvolume exists
+      type: str
+      sample: subvolume
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

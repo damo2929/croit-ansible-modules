@@ -62,7 +62,7 @@ options:
     type: int
   type:
     description:
-      - Fabric the listener speaks.
+      - Fabric the listener speaks, NVMe/TCP or NVMe/RDMA.
     type: str
     choices: [tcp, rdma]
     default: tcp
@@ -83,9 +83,27 @@ options:
     type: str
     choices: [present, absent]
     default: present
+seealso:
+  - module: croit.ceph.nvmeof_gateway
+    description: Manage the NVMe-oF cluster, its target services and transport settings.
+  - module: croit.ceph.server_vlan
+    description: Create the VLAN interface a listener uses.
+  - module: croit.ceph.nvmeof_info
+    description: Read the listeners of every target service.
+  - name: Ceph NVMe-oF target configuration
+    description: Upstream guide to configuring NVMe-oF targets and listeners.
+    link: https://docs.ceph.com/en/latest/rbd/nvmeof-target-configure/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - Removing a listener only affects connections through that address; hosts with other paths keep them, so
+    O(state=absent) needs no confirmation.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Listen on the storage VLAN of both targets
   croit.ceph.nvmeof_listener:
     gateway: nvme-prod
@@ -94,6 +112,20 @@ EXAMPLES = r"""
     vlan: 50
     port: 4420
   loop: [nvme1, nvme2]
+  register: listeners
+
+- name: Show the listener ids
+  ansible.builtin.debug:
+    msg: "{{ listeners.results | map(attribute='listener.listenerId') | list }}"
+
+- name: Require TLS on a listener
+  croit.ceph.nvmeof_listener:
+    gateway: nvme-prod
+    service: nvme1
+    nic: eth1
+    vlan: 50
+    port: 4420
+    secure: true
 
 - name: Remove the old listener
   croit.ceph.nvmeof_listener:
@@ -107,24 +139,94 @@ EXAMPLES = r"""
 RETURN = r"""
 listener:
   description:
-    - The listener as croit reports it after the change (C(NvmeOFListenerConfigResponse)).
+    - The listener as croit reports it after the change (C(NvmeOFListenerConfigResponse) in the croit API).
     - Before the change in check mode; empty when it does not exist.
   returned: always
   type: dict
-  sample:
-    listenerId: 9
-    gatewayId: 1
-    serviceId: 2
-    type: TCP
-    nicId: 11
-    nicName: eth1
-    vlan: 50
-    port: 4420
-    secure: false
+  contains:
+    listenerId:
+      description: croit id of the listener.
+      returned: when the listener exists
+      type: int
+      sample: 9
+    gatewayId:
+      description: croit id of the NVMe-oF cluster.
+      returned: when the listener exists
+      type: int
+      sample: 1
+    serviceId:
+      description: croit id of the target service.
+      returned: when the listener exists
+      type: int
+      sample: 21
+    type:
+      description: Fabric of the listener, C(TCP) or C(RDMA).
+      returned: when the listener exists
+      type: str
+      sample: TCP
+    nicId:
+      description: croit id of the interface.
+      returned: when the listener exists
+      type: int
+      sample: 11
+    nicName:
+      description: Name of the interface.
+      returned: when the listener exists
+      type: str
+      sample: eth1
+    vlan:
+      description: VLAN tag the listener uses, null when it listens on the interface itself.
+      returned: when the listener exists
+      type: int
+      sample: 50
+    vlanId:
+      description: croit id of the VLAN record, null when no VLAN is used.
+      returned: when the listener exists
+      type: int
+      sample: 5
+    port:
+      description: Port of the listener, null when the cluster's default port is used.
+      returned: when the listener exists
+      type: int
+      sample: 4420
+    secure:
+      description: Whether the listener uses TLS.
+      returned: when the listener exists
+      type: bool
+      sample: false
 task:
-  description: The croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Add NVMe-oF listener
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

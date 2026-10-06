@@ -17,11 +17,11 @@ short_description: Manage the SSH keys allowed on croit-managed servers
 version_added: 0.1.0
 description:
   - Manages the list of public SSH keys croit installs for C(root) on every server it manages.
-  - croit stores the list as a whole. The module reads it, adds or removes the given keys and writes the
-    result back, so keys added in the croit UI are kept unless O(exclusive=true).
-  - Keys are matched by their type and key data (for example C(ssh-ed25519 AAAA...)). Options in front of
-    the key and the trailing comment are ignored when matching, so a key whose comment differs is not
-    changed. To change a comment, remove the key and add it again.
+  - croit stores the list as a whole. The module reads it, adds or removes the given keys and writes the result
+    back only when it differs, so keys added in the croit UI are kept unless O(exclusive=true).
+  - Keys are matched by their type and key data (for example C(ssh-ed25519 AAAA...)). Options in front of the
+    key and the trailing comment are ignored when matching, so a key whose comment differs is not changed. To
+    change a comment, remove the key and add it again.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -32,16 +32,20 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows the complete key list before and after.
 options:
   keys:
     description:
-      - Public keys in C(authorized_keys) format.
+      - Public keys in C(authorized_keys) format, one key per entry.
+      - Duplicate keys (same type and key data) are added once. Empty entries fail the task.
     type: list
     elements: str
     required: true
   state:
     description:
-      - V(present) makes sure the keys are allowed; V(absent) makes sure they are not.
+      - V(present) makes sure the keys are allowed, adding the missing ones at the end of the list.
+      - V(absent) makes sure they are not, removing every entry with the same type and key data.
     type: str
     choices: [present, absent]
     default: present
@@ -52,21 +56,37 @@ options:
       - Not valid with O(state=absent).
     type: bool
     default: false
+notes:
+  - Removing the last key you can log in with leaves only croit's own access to the servers.
+seealso:
+  - module: croit.ceph.server
+    description: Manage the servers these keys are installed on.
+  - module: croit.ceph.hook_script
+    description: Run scripts on the servers, for example to install further keys for other users.
+  - name: croit API reference
+    description: The C(/server-access/keys) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: Allow the ops team's keys
   croit.ceph.server_ssh_keys:
     keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyAlice alice@ops
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyBob bob@ops
+  register: allowed
+
+- name: Show how many keys are allowed
+  ansible.builtin.debug:
+    msg: "{{ allowed.ssh_keys | length }} keys are allowed on the servers"
 
 - name: Exactly these keys, nothing else
   croit.ceph.server_ssh_keys:
     keys: "{{ ops_ssh_keys }}"
     exclusive: true
 
-- name: Revoke a key
+- name: Revoke a key (the comment does not matter)
   croit.ceph.server_ssh_keys:
     keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyBob
@@ -76,11 +96,13 @@ EXAMPLES = r"""
 RETURN = r"""
 ssh_keys:
   description:
-    - The keys croit has after the change (before it, in check mode).
+    - The keys croit has after the change. In check mode, the keys before the change.
     - Named C(ssh_keys) rather than C(keys), which would clash with the C(keys()) method in Jinja.
   returned: always
   type: list
   elements: str
+  sample:
+    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKeyAlice alice@ops
 """
 
 import re

@@ -17,7 +17,7 @@ module: rbd_info
 short_description: Read RBD images from a croit cluster
 version_added: 0.1.0
 description:
-  - Returns RBD images, filtered by pool, namespace and name.
+  - Returns RBD images, filtered by pool, namespace and name. This module never changes anything.
   - With O(name) set, the image is read from the cluster and includes its snapshots. Otherwise the images
     are read in batches, without snapshots.
 author:
@@ -51,13 +51,27 @@ options:
         cheaper on large clusters.
     type: bool
     default: true
+seealso:
+  - module: croit.ceph.rbd
+    description: Create, grow, clone and delete RBD images.
+  - module: croit.ceph.rbd_snapshot
+    description: Manage the snapshots of an image.
+  - name: croit API reference
+    description: The C(/rbds) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: All images in a pool
   croit.ceph.rbd_info:
     pool: rbd-ssd
   register: images
+
+- name: Show the images larger than 1 TiB
+  ansible.builtin.debug:
+    msg: "{{ images.images | selectattr('size', 'gt', 1099511627776) | map(attribute='name') | list }}"
 
 - name: One image with its snapshots
   croit.ceph.rbd_info:
@@ -68,21 +82,67 @@ EXAMPLES = r"""
 - name: Just the names of every image on the cluster
   croit.ceph.rbd_info:
     details: false
+  register: names
 """
 
 RETURN = r"""
 images:
   description:
-    - The images (C(RbdImageResponse) in the croit API), or C(RbdNameResponse) entries with O(details=false).
+    - The images (C(RbdImageResponse) in the croit API). Empty when nothing matches.
+    - With O(details=false), each entry only has C(pool), C(namespace) and C(rbd), the image name.
   returned: always
   type: list
   elements: dict
-  sample:
-    - name: vm-disk-01
-      pool: rbd-ssd
-      namespace: null
-      size: 107374182400
-      features: [LAYERING, EXCLUSIVE_LOCK]
+  contains:
+    name:
+      description: The image's name.
+      returned: when O(details=true)
+      type: str
+      sample: vm-disk-01
+    rbd:
+      description: The image's name.
+      returned: when O(details=false)
+      type: str
+      sample: vm-disk-01
+    pool:
+      description: The pool the image is in.
+      returned: always
+      type: str
+      sample: rbd-ssd
+    namespace:
+      description: The namespace the image is in, or V(null) for the pool's default namespace.
+      returned: always
+      type: str
+      sample: null
+    size:
+      description: The image's size in bytes, or V(-1) where croit could not read it.
+      returned: when O(details=true)
+      type: int
+      sample: 107374182400
+    features:
+      description: The enabled rbd features, as croit spells them.
+      returned: when O(details=true)
+      type: list
+      elements: str
+      sample: [LAYERING, EXCLUSIVE_LOCK]
+    parent:
+      description: The snapshot the image was cloned from, or V(null).
+      returned: when O(details=true)
+      type: dict
+      sample: null
+    mirrorInfo:
+      description: How the image is mirrored (C(RbdMirrorImageInfo) in the croit API).
+      returned: when O(details=true)
+      type: dict
+      sample:
+        imageMirrorMode: DISABLED
+        mirrorState: DISABLED
+    snaps:
+      description: The image's snapshots, each with C(id), C(name) and C(protect).
+      returned: when O(name) is set
+      type: list
+      elements: dict
+      sample: []
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

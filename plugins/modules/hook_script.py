@@ -21,9 +21,11 @@ module: hook_script
 short_description: Manage croit hook scripts
 version_added: 0.1.0
 description:
-  - Create, update and delete the scripts croit runs when an event happens on the cluster, identified by
-    their name.
-  - The script text is compared exactly. The points a script runs at are compared as a set.
+  - Creates, updates and deletes the scripts croit runs when an event happens on the cluster. A script is
+    identified by its O(name).
+  - The script text is compared exactly and only read when O(content) is set. The points a script runs at are
+    compared as a set, so their order does not matter. Options left unset are left alone.
+  - Hook points and server names are checked against croit before anything is written, in check mode too.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -34,45 +36,64 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows the script text (when O(content) is set) and, per hook point, the servers it runs on.
 options:
   name:
     description:
-      - The script's file name, unique across the cluster.
+      - The script's file name, unique across the cluster, for example V(tune-disks.sh). It identifies the
+        script; renaming is not supported.
     type: str
     required: true
   state:
     description:
-      - Whether the script should exist. Deleting a script also detaches it from every point.
+      - V(present) creates the script or updates its text and hook points.
+      - V(absent) deletes it, which also detaches it from every point. A script that does not exist is left
+        alone.
     type: str
     choices: [present, absent]
     default: present
   content:
     description:
-      - The script itself. Required to create a script.
-      - Use the M(ansible.builtin.file) lookup or C(lookup('ansible.builtin.template', ...)) to load it from a file.
+      - The script itself, compared exactly. Required to create a script; when not set, an existing script's
+        text is left alone.
+      - Load it from a file with C(lookup('ansible.builtin.file', ...)) or C(lookup('ansible.builtin.template', ...)).
     type: str
   hooks:
     description:
       - The complete list of points the script runs at. An empty list detaches it from every point.
-      - When not set, the points are left alone.
+      - When not set, the points are left alone. Each point may be listed only once.
     type: list
     elements: dict
     suboptions:
       event:
         description:
-          - The hook point, for example V(PostDaemonStart) or V(OnHealthDegrade). The module checks it
-            against the points this croit release offers.
+          - The hook point, for example V(PostDaemonStart), V(OnHealthDegrade) or V(PostBackupFailed). The
+            module checks it against the points this croit release offers and lists them on a mismatch.
         type: str
         required: true
       servers:
         description:
-          - Servers, by hostname or id, the script runs on for points that fire on cluster nodes.
-          - When not set, it runs on every server. Not valid for points that fire on the management node.
+          - Servers, by hostname or id, the script runs on, for points that fire on cluster nodes.
+          - When not set, it runs on every server. Not valid for points that fire on the management node, which
+            fail the task when given servers.
         type: list
         elements: str
+notes:
+  - Hook scripts run as C(root) on the servers or on the management node; review them like any other code
+    that runs with full privileges.
+seealso:
+  - module: croit.ceph.config_template
+    description: Template config files instead of scripting changes.
+  - module: croit.ceph.server_info
+    description: Find the hostnames and ids O(hooks[].servers) accepts.
+  - name: croit API reference
+    description: The C(/events) endpoints this module uses, including the list of hook points.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: Tune disks after every daemon start, on two nodes
   croit.ceph.hook_script:
     name: tune-disks.sh
@@ -80,8 +101,13 @@ EXAMPLES = r"""
     hooks:
       - event: PostDaemonStart
         servers: [storage-01, storage-02]
+  register: tune_disks
 
-- name: Notify on health changes (management node)
+- name: Show croit's id of the script
+  ansible.builtin.debug:
+    msg: "tune-disks.sh has id {{ tune_disks.script.id }}"
+
+- name: Notify on health changes (runs on the management node)
   croit.ceph.hook_script:
     name: notify.sh
     content: |
@@ -90,6 +116,12 @@ EXAMPLES = r"""
     hooks:
       - event: OnHealthDegrade
       - event: OnHealthRecover
+
+- name: Run the disk tuning on every server instead
+  croit.ceph.hook_script:
+    name: tune-disks.sh
+    hooks:
+      - event: PostDaemonStart
 
 - name: Remove a script
   croit.ceph.hook_script:
@@ -101,16 +133,34 @@ RETURN = r"""
 script:
   description:
     - The script as croit lists it after the change (C(ScriptInfo) in the croit API), without its text.
-    - Before the change in check mode; empty when the script does not exist.
+    - In check mode, the script before the change. Empty when the script does not exist.
   returned: always
   type: dict
-  sample:
-    id: 7
-    name: notify.sh
+  contains:
+    id:
+      description: croit's id of the script.
+      returned: when the script exists
+      type: int
+      sample: 7
+    name:
+      description: The script's file name.
+      returned: when the script exists
+      type: str
+      sample: notify.sh
     hooks:
-      - event: OnHealthDegrade
-        allServers: false
-        serverIds: null
+      description:
+        - The points the script runs at, each with C(event), C(allServers) and C(serverIds).
+        - Points that fire on the management node have C(allServers=false) and no server ids.
+      returned: when the script exists
+      type: list
+      elements: dict
+      sample:
+        - event: OnHealthDegrade
+          allServers: false
+          serverIds: null
+        - event: PostDaemonStart
+          allServers: false
+          serverIds: [3, 4]
 """
 
 import json

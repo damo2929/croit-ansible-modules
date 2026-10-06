@@ -18,11 +18,13 @@ module: network
 short_description: Manage the networks croit knows on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete the subnets croit manages, identified by their CIDR.
+  - Creates, updates and deletes the subnets croit manages. A network is identified by its O(cidr).
   - croit uses them to place node addresses, to serve DHCP and PXE boot, and to write the Ceph public and
     cluster networks to C(ceph.conf).
-  - Only options that are set are managed; anything left out keeps its current value. croit replaces the
-    whole network on update, so the module sends the current settings merged with the requested ones.
+  - Only options that are set are managed; anything left out keeps its current value. croit replaces the whole
+    network on update, so the module sends the current settings merged with the requested ones, and only when
+    something differs.
+  - Gateway and DHCP pool addresses must lie inside the network; this is checked before anything is written.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -33,63 +35,86 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows the type, description, MTU, gateway and DHCP pool in canonical form.
 options:
   cidr:
     description:
-      - The network in CIDR notation, for example V(10.10.0.0/24).
-      - Identifies the network. A host address with a prefix such as V(10.10.0.5/24) names the same network,
-        and is sent to croit as the network's address when it is created.
+      - The network in CIDR notation, for example V(10.10.0.0/24). It identifies the network and must include a
+        prefix length.
+      - A host address with a prefix such as V(10.10.0.5/24) names the same network, and is sent to croit as the
+        network's address when it is created. IPv6 networks work the same way.
     type: str
     required: true
   state:
     description:
-      - Whether the network should exist.
-      - Deleting a network does not take addresses away from nodes, but croit stops handing out new ones
-        from it, stops serving DHCP for it, and no longer lists it in C(ceph.conf) for its type.
+      - V(present) creates the network or updates it.
+      - V(absent) deletes it. Deleting a network does not take addresses away from nodes, but croit stops handing
+        out new ones from it, stops serving DHCP for it, and no longer lists it in C(ceph.conf) for its type.
     type: str
     choices: [present, absent]
     default: present
   type:
     description:
       - What croit uses the network for. V(croit) networks are used for PXE booting; V(ceph_public) and
-        V(ceph_internal) become the Ceph public and cluster networks.
+        V(ceph_internal) become the Ceph public and cluster networks; V(ipmi) holds the BMCs.
       - croit uses V(other) when a network is created without it.
     type: str
     choices: [other, ceph_public, ceph_internal, croit, ipmi]
   description:
     description:
-      - Free text notes.
+      - Free-text notes croit shows for the network. An empty string clears them.
     type: str
   gateway:
     description:
-      - Gateway installed as the default route on servers with an address in this network.
+      - Gateway installed as the default route on servers with an address in this network. Must lie inside the
+        network.
       - An empty string removes it.
     type: str
   mtu:
     description:
-      - MTU of the network. V(1500) is croit's default.
+      - MTU of the network, for example V(9000) for jumbo frames. V(1500) is croit's default and matches a network
+        that has no custom MTU.
     type: int
   dhcp_pool_start:
     description:
-      - First address of the DHCP pool. Must be set together with O(dhcp_pool_end).
+      - First address of the DHCP pool. Must be set together with O(dhcp_pool_end) and lie inside the network.
       - An empty string for both removes the pool.
     type: str
   dhcp_pool_end:
     description:
-      - Last address of the DHCP pool. Must be set together with O(dhcp_pool_start).
+      - Last address of the DHCP pool. Must be set together with O(dhcp_pool_start) and lie inside the network.
     type: str
 notes:
-  - Every change rewrites the management node's NTP access list, restarts its NTP service and reloads the
-    DHCP server.
+  - Every change rewrites the management node's NTP access list, restarts its NTP service and reloads the DHCP
+    server.
+  - Deleting a network needs no C(confirm_delete) flag, because nodes keep their addresses.
+seealso:
+  - module: croit.ceph.network_info
+    description: Read the networks croit knows.
+  - module: croit.ceph.server_nic
+    description: Set the addresses of server interfaces in these networks.
+  - name: croit API reference
+    description: The C(/networks) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph network configuration
+    description: How Ceph uses the public and cluster networks.
+    link: https://docs.ceph.com/en/latest/rados/configuration/network-config-ref/
 """
 
 EXAMPLES = r"""
-- name: Ceph public network
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+- name: Ceph public network with jumbo frames
   croit.ceph.network:
     cidr: 10.10.0.0/24
     type: ceph_public
     mtu: 9000
     description: public network, bond0
+  register: public_net
+
+- name: Show croit's id of the network
+  ansible.builtin.debug:
+    msg: "Network {{ public_net.network.ip }}/{{ public_net.network.netmask }} has id {{ public_net.network.id }}"
 
 - name: PXE boot network with a DHCP pool
   croit.ceph.network:
@@ -98,6 +123,12 @@ EXAMPLES = r"""
     gateway: 192.168.100.1
     dhcp_pool_start: 192.168.100.100
     dhcp_pool_end: 192.168.100.200
+
+- name: Remove the DHCP pool again
+  croit.ceph.network:
+    cidr: 192.168.100.0/24
+    dhcp_pool_start: ""
+    dhcp_pool_end: ""
 
 - name: Remove a network
   croit.ceph.network:
@@ -109,19 +140,55 @@ RETURN = r"""
 network:
   description:
     - The network as croit reports it after the change (C(NetworkInfo) in the croit API).
-    - Before the change in check mode; empty when the network does not exist.
+    - In check mode, the network before the change. Empty when the network does not exist.
   returned: always
   type: dict
-  sample:
-    id: 4
-    ip: 10.10.0.0
-    netmask: 24
-    type: ceph_public
-    description: public network
-    gateway: null
-    mtu: 9000
-    poolStart: null
-    poolEnd: null
+  contains:
+    id:
+      description: croit's id of the network.
+      returned: when the network exists
+      type: int
+      sample: 4
+    ip:
+      description: An address in the network, not necessarily the network address; together with C(netmask) it gives the CIDR.
+      returned: when the network exists
+      type: str
+      sample: 10.10.0.0
+    netmask:
+      description: The CIDR prefix length.
+      returned: when the network exists
+      type: int
+      sample: 24
+    type:
+      description: What croit uses the network for.
+      returned: when the network exists
+      type: str
+      sample: ceph_public
+    description:
+      description: Free-text notes.
+      returned: when the network exists
+      type: str
+      sample: public network, bond0
+    gateway:
+      description: Default route installed on servers in this network, or null.
+      returned: when the network exists
+      type: str
+      sample: 10.10.0.1
+    mtu:
+      description: Custom MTU, or null for the default of 1500.
+      returned: when the network exists
+      type: int
+      sample: 9000
+    poolStart:
+      description: First address of the DHCP pool, or null.
+      returned: when the network exists
+      type: str
+      sample: 192.168.100.100
+    poolEnd:
+      description: Last address of the DHCP pool, or null.
+      returned: when the network exists
+      type: str
+      sample: 192.168.100.200
 """
 
 import ipaddress

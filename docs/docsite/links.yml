@@ -1,0 +1,13 @@
+---
+edit_on_github:
+  repository: damo2929/croit-ansible-modules
+  branch: main
+  path_prefix: ''
+
+extra_links:
+  - description: Report an issue
+    url: https://github.com/damo2929/croit-ansible-modules/issues/new
+  - description: croit API reference
+    url: https://www.croit.io/api-docs
+  - description: croit documentation
+    url: https://www.croit.io/docs

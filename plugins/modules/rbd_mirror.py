@@ -34,7 +34,7 @@ description:
     side.
   - 2. Read a bootstrap token on one cluster with O(return_token=true).
   - 3. Import that token on the other cluster with O(peer). See the examples.
-  - The rbd-mirror daemon itself is started with the service modules.
+  - The rbd-mirror daemon itself is started with M(croit.ceph.service) (O(croit.ceph.service#module:type=rbd_mirror)).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -50,12 +50,12 @@ attributes:
 options:
   pool:
     description:
-      - The pool. Erasure coded pools cannot be mirrored.
+      - Name of the pool to mirror. Erasure coded pools cannot be mirrored.
     type: str
     required: true
   namespace:
     description:
-      - Namespace within the pool. The pool's default namespace when not set.
+      - Namespace within the pool whose mirroring is managed. The pool's default namespace when not set.
     type: str
   mode:
     description:
@@ -122,11 +122,13 @@ options:
     elements: dict
     suboptions:
       name:
-        description: The image.
+        description: Name of the image within O(pool) and O(namespace).
         type: str
         required: true
       mode:
-        description: V(journal) also enables the image's journaling feature, which journal mode replicates.
+        description:
+          - How the image mirrors. V(disabled) stops mirroring it.
+          - V(journal) also enables the image's journaling feature, which journal mode replicates.
         type: str
         choices: [disabled, journal, snapshot]
       primary:
@@ -139,9 +141,26 @@ options:
       - Not done in check mode, because ceph creates the peer key the token carries the first time.
     type: bool
     default: false
+notes:
+  - The bootstrap token carries the peer's monitor addresses and a Ceph key. Never put it in a playbook in
+    clear text, and use C(no_log) on tasks that read or register it.
+  - Turning mirroring off on a pool removes its peers.
+seealso:
+  - module: croit.ceph.service
+    description: Start the rbd-mirror daemon on the receiving cluster.
+  - module: croit.ceph.rbd
+    description: Create the images that are mirrored.
+  - name: croit API reference
+    description: The C(/pools/{pool}/rbd-mirror) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RBD mirroring
+    description: Upstream documentation of RBD mirroring modes, peers and schedules.
+    link: https://docs.ceph.com/en/latest/rbd/rbd-mirroring/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 # On the backup cluster: enable mirroring and hand out a token
 - name: Enable mirroring and get a token
   croit.ceph.rbd_mirror:
@@ -151,7 +170,6 @@ EXAMPLES = r"""
     return_token: true
   register: backup
   no_log: true
-  delegate_to: localhost
 
 # On the primary cluster: import the token and mirror two images by snapshot
 - name: Connect the primary to the backup cluster
@@ -168,6 +186,16 @@ EXAMPLES = r"""
     images:
       - {name: vm-disk-01, mode: snapshot}
       - {name: vm-disk-02, mode: snapshot}
+  no_log: true
+
+- name: Read the mirroring state
+  croit.ceph.rbd_mirror:
+    pool: rbd
+  register: mirroring
+
+- name: Show how the rbd-mirror daemon sees the pool
+  ansible.builtin.debug:
+    msg: "{{ mirroring.mirror.statusHealth }}"
 
 - name: Fail over to the backup cluster
   croit.ceph.rbd_mirror:
@@ -178,17 +206,75 @@ EXAMPLES = r"""
 
 RETURN = r"""
 mirror:
-  description: The pool's mirroring as croit reports it after the change (C(RbdMirrorPoolInfo) in the croit API).
+  description:
+    - The pool's mirroring as croit reports it after the change (C(RbdMirrorPoolInfo) in the croit API).
+    - In check mode, the mirroring before the change.
   returned: always
   type: dict
+  contains:
+    pool:
+      description: The pool this is about.
+      returned: always
+      type: str
+      sample: rbd
+    namespace:
+      description: The namespace, or V(null) for the pool itself.
+      returned: always
+      type: str
+      sample: null
+    poolMirrorMode:
+      description: The mirroring mode, V(disabled), V(pool) or V(image).
+      returned: always
+      type: str
+      sample: image
+    siteName:
+      description: What this cluster calls itself to its peers, or V(null).
+      returned: always
+      type: str
+      sample: primary
+    peers:
+      description: The registered peer clusters, each with C(id), C(siteName), C(direction) and C(clientName).
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - id: 5f8a2c1e-0000-4000-8000-000000000001
+          siteName: backup
+          direction: tx-only
+          clientName: client.rbd-mirror-peer
+    statusHealth:
+      description: What the rbd-mirror daemon makes of the pool, or V(null) while mirroring is off.
+      returned: always
+      type: str
+      sample: OK
+    statusStates:
+      description: How many images are in each mirroring state, or V(null) while mirroring is off.
+      returned: always
+      type: dict
+      sample:
+        replaying: 2
 bootstrap_token:
-  description: A bootstrap token for the pool. B(Secret.)
+  description:
+    - A bootstrap token for the pool, to import on the peer cluster with O(peer.token). B(Secret.)
+    - Returned unmasked so it can be used; set C(no_log) on the task.
   returned: when O(return_token=true) and not in check mode
   type: str
+  sample: "********"
 task:
   description: The croit background task the last change ran as.
-  returned: when a task ran
+  returned: when a change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task).
+      returned: always
+      type: int
+      sample: 421
+    state:
+      description: The task's state; V(FINISHED) after a successful wait.
+      returned: always
+      type: str
+      sample: FINISHED
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import CroitError, CroitWarning, path_join

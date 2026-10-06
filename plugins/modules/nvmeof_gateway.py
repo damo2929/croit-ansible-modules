@@ -63,7 +63,7 @@ options:
     default: present
   description:
     description:
-      - Description of the cluster shown in croit.
+      - Free-text description of the NVMe-oF cluster, shown in croit. Left alone when not set.
     type: str
   force_secure:
     description:
@@ -188,11 +188,34 @@ options:
 notes:
   - Creating the cluster also makes croit create one subsystem for it; manage it with
     M(croit.ceph.nvmeof_subsystem).
+  - O(state=absent) B(disconnects every host) of the cluster. The RBD images behind its exported disks are kept.
+  - Target services are never removed by this module; remove them with M(croit.ceph.service).
   - Follow-up changes after a creation (for example O(services[].ana_state) of a new service) are only
     applied with O(wait=true).
+seealso:
+  - module: croit.ceph.nvmeof_info
+    description: Read NVMe-oF clusters, services, listeners, subsystems, disks and hosts.
+  - module: croit.ceph.nvmeof_subsystem
+    description: Manage subsystems and what is attached to them.
+  - module: croit.ceph.nvmeof_disk
+    description: Export RBD images as NVMe-oF disks.
+  - module: croit.ceph.nvmeof_host
+    description: Allow hosts onto the cluster.
+  - module: croit.ceph.nvmeof_listener
+    description: Manage the addresses target services listen on.
+  - module: croit.ceph.service
+    description: Remove a target service.
+  - name: Ceph NVMe-oF gateway
+    description: Upstream documentation of the Ceph NVMe over Fabrics gateway.
+    link: https://docs.ceph.com/en/latest/rbd/nvmeof-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: NVMe-oF cluster on two servers
   croit.ceph.nvmeof_gateway:
     name: nvme-prod
@@ -206,6 +229,11 @@ EXAMPLES = r"""
       - server: nvme2
         nr_hugepages: 4096
         ana_state: non_optimized
+  register: nvme_prod
+
+- name: Show the target services and where they run
+  ansible.builtin.debug:
+    msg: "{{ nvme_prod.services | map(attribute='serverHostname') | list }}"
 
 - name: Ceph cluster configuration used by exported disks
   croit.ceph.nvmeof_gateway:
@@ -213,6 +241,15 @@ EXAMPLES = r"""
     ceph_clusters:
       - name: ceph-nvmeof
         client_id: nvmeof
+
+- name: Preview pinning a target to other CPU cores
+  croit.ceph.nvmeof_gateway:
+    name: nvme-prod
+    services:
+      - server: nvme1
+        cpu_cores: 2-5
+  check_mode: true
+  diff: true
 
 - name: Push the configuration to the targets again
   croit.ceph.nvmeof_gateway:
@@ -229,35 +266,172 @@ EXAMPLES = r"""
 RETURN = r"""
 gateway:
   description:
-    - The NVMe-oF cluster as croit reports it after the change (C(NvmeOFGatewayResponse)).
+    - The NVMe-oF cluster as croit reports it after the change (C(NvmeOFGatewayResponse) in the croit API).
     - Before the change in check mode; empty when it does not exist.
   returned: always
   type: dict
-  sample:
-    gatewayId: 1
-    name: nvme-prod
-    description: VMware datastores
-    forceSecure: false
-    transportDefaults: []
+  contains:
+    gatewayId:
+      description: croit id of the NVMe-oF cluster.
+      returned: when the cluster exists
+      type: int
+      sample: 1
+    name:
+      description: Name of the cluster.
+      returned: when the cluster exists
+      type: str
+      sample: nvme-prod
+    description:
+      description: Description of the cluster.
+      returned: when the cluster exists
+      type: str
+      sample: VMware datastores
+    forceSecure:
+      description: Whether TLS is forced on every listener.
+      returned: when the cluster exists
+      type: bool
+      sample: false
+    transportDefaults:
+      description: Default per-fabric settings, each with C(type) and the SPDK transport options that are set.
+      returned: when the cluster exists
+      type: list
+      elements: dict
+      sample:
+        - type: TCP
+          maxIoQpairsPerCtrlr: 127
+    hints:
+      description: Configuration problems croit found for the cluster.
+      returned: when the cluster exists
+      type: list
+      elements: dict
+      sample: []
 services:
-  description: The cluster's target services (C(NvmeOFServiceResponse)).
+  description:
+    - The cluster's target services (C(NvmeOFServiceResponse) in the croit API) after the change.
+    - Empty when the cluster does not exist.
   returned: always
   type: list
   elements: dict
+  contains:
+    serviceId:
+      description: croit service id of the target service.
+      returned: always
+      type: int
+      sample: 21
+    gatewayId:
+      description: croit id of the NVMe-oF cluster the service belongs to.
+      returned: always
+      type: int
+      sample: 1
+    serverId:
+      description: croit id of the server the service runs on.
+      returned: always
+      type: int
+      sample: 3
+    serverHostname:
+      description: Hostname of the server the service runs on.
+      returned: always
+      type: str
+      sample: nvme1
+    name:
+      description: Service name, generated by croit and used as the systemd unit name.
+      returned: always
+      type: str
+      sample: nvmeof-nvme-prod-1
+    description:
+      description: Description of the service.
+      returned: always
+      type: str
+      sample: ""
+    nrHugepages:
+      description: Hugepages reserved on the server.
+      returned: always
+      type: int
+      sample: 4096
+    cpuCores:
+      description: CPU cores the target is pinned to, empty when croit derives them.
+      returned: always
+      type: str
+      sample: 1-3
+    anaState:
+      description: Access state every listener of the service advertises.
+      returned: always
+      type: str
+      sample: optimized
+    transports:
+      description: Per-fabric settings of this service (C(NvmeOFTransportConfigResponse)).
+      returned: always
+      type: list
+      elements: dict
+      sample: []
+    listeners:
+      description: Listeners of this service, with the same fields as RV(croit.ceph.nvmeof_listener#module:listener).
+      returned: always
+      type: list
+      elements: dict
+      sample: []
 ceph_clusters:
-  description: All ceph cluster configurations, when O(ceph_clusters) is set.
+  description: Every ceph cluster configuration of the NVMe-oF gateways (C(NvmeOFCephClusterResponse)).
   returned: when O(ceph_clusters) is set
   type: list
   elements: dict
+  contains:
+    name:
+      description: Name of the ceph cluster configuration.
+      returned: always
+      type: str
+      sample: ceph-nvmeof
+    clientId:
+      description: Ceph client the targets authenticate as, null for croit's own client.
+      returned: always
+      type: str
+      sample: nvmeof
 task:
-  description: The last croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Configure NVMe-oF cluster
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 tasks:
-  description: Every croit background task the change ran as, in order.
-  returned: when a task ran
+  description:
+    - Every croit background task the change ran as, in the order they ran. Each entry has the same fields as
+      RV(task).
+  returned: when the change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Configure NVMe-oF cluster
+      state: FINISHED
+      done: true
+      output: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

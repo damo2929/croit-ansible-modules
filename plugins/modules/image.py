@@ -36,6 +36,14 @@ attributes:
     support: full
   diff_mode:
     support: full
+seealso:
+  - module: croit.ceph.image_config
+    description: Enabled architectures, the image registry and the Ceph build.
+  - module: croit.ceph.server
+    description: Pin a server to an image, or reboot it onto a new default.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   id:
     description:
@@ -73,21 +81,30 @@ options:
     type: bool
     default: false
 notes:
+  - Making an image the default changes what servers that follow the default boot at their next reboot;
+    nothing is rebooted by this module.
   - When the image is already being downloaded (for example by croit itself), the module waits for that
     download to finish with O(wait=true) and reports no change.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Download the newest x86_64 image and make it the default
   croit.ceph.image:
     latest: true
     default: true
+  register: newest
+
+- name: Show which image is now the default
+  ansible.builtin.debug:
+    msg: "{{ newest.image.id }} ({{ newest.image.description }})"
 
 - name: Keep a specific image downloaded
   croit.ceph.image:
     id: 4b1d3f6a-2c41-4f3e-9b55-0d6f0c6e9a10
 
-- name: Free the disk space of an old image
+- name: Free the disk space of an old image (it can be downloaded again)
   croit.ceph.image:
     id: 0e8c2b8e-7d3a-4f8e-a1c2-5a3c1d9e8f70
     state: absent
@@ -100,10 +117,72 @@ image:
     - Before the change in check mode.
   returned: always
   type: dict
+  contains:
+    id:
+      description: The image's id.
+      returned: always
+      type: str
+      sample: 4b1d3f6a-2c41-4f3e-9b55-0d6f0c6e9a10
+    description:
+      description: Human-readable name of the image.
+      returned: always
+      type: str
+      sample: croit 2510.0 (squid)
+    cpuArchitecture:
+      description: CPU architecture the image is built for.
+      returned: always
+      type: str
+      sample: x86_64
+    cephVersionShort:
+      description: The Ceph version the image carries.
+      returned: always
+      type: str
+      sample: "19.2.3"
+    downloaded:
+      description: Whether the image's files are on the management node.
+      returned: always
+      type: bool
+      sample: true
+    downloading:
+      description: Whether a download is in progress.
+      returned: always
+      type: bool
+      sample: false
+    isDefault:
+      description: Whether the image is the default for its architecture.
+      returned: always
+      type: bool
+      sample: true
 task:
-  description: The croit background task the last change ran as.
+  description: The croit background task the last change ran as (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 import time

@@ -53,11 +53,12 @@ options:
     default: present
   service_id:
     description:
-      - croit service id of the gateway. Only needed if croit ever reports more than one iSCSI gateway.
+      - croit service id of the gateway. Only needed if croit ever reports more than one iSCSI gateway; by
+        default the single gateway is used.
     type: int
   description:
     description:
-      - Description of the gateway service.
+      - Free-text description of the gateway service, shown in croit. Left alone when not set.
     type: str
   servers:
     description:
@@ -69,7 +70,7 @@ options:
     elements: dict
     suboptions:
       server:
-        description: Server hostname or croit id.
+        description: Server the portal runs on, by hostname or numeric croit id. croit must manage the server.
         type: str
         required: true
       ip:
@@ -88,10 +89,34 @@ options:
       - Also confirms croit's own warning about removing the gateway.
     type: bool
     default: false
+seealso:
+  - module: croit.ceph.iscsi_info
+    description: Read the gateway, its portals, exported disks, host groups and initiators.
+  - module: croit.ceph.iscsi_client
+    description: Allow initiators onto the target and map disks to them.
+  - module: croit.ceph.iscsi_group
+    description: Manage host groups and the disks mapped to them.
+  - module: croit.ceph.iscsi_disk
+    description: Grow, unexport or delete exported disks.
+  - name: Ceph iSCSI gateway
+    description: Upstream documentation of the Ceph iSCSI gateway.
+    link: https://docs.ceph.com/en/latest/rbd/iscsi-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - O(state=absent) removes the whole ceph-iscsi target configuration and B(disconnects every initiator). The RBD
+    images behind the exported disks are kept.
+  - When portals change, new portals are added before old ones are removed, because the target only lets a gateway
+    go while the others are online.
+  - When the gateway is created with O(wait=false) and croit has not written the service yet, O(target) is selected
+    on a later run.
 """
 
 EXAMPLES = r"""
-- name: iSCSI gateway on two portals
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create the iSCSI gateway on two portals
   croit.ceph.iscsi_gateway:
     description: VMware datastores
     servers:
@@ -99,10 +124,27 @@ EXAMPLES = r"""
         ip: 10.10.0.11
       - server: storage-2
         ip: 10.10.0.12
+  register: iscsi_gw
+
+- name: Show the target IQN croit manages
+  ansible.builtin.debug:
+    msg: "{{ iscsi_gw.config.selectedTarget }}"
 
 - name: Select the target croit manages
   croit.ceph.iscsi_gateway:
     target: iqn.2001-07.com.ceph:1700000000000
+
+- name: Preview adding a third portal
+  croit.ceph.iscsi_gateway:
+    servers:
+      - server: storage-1
+        ip: 10.10.0.11
+      - server: storage-2
+        ip: 10.10.0.12
+      - server: storage-3
+        ip: 10.10.0.13
+  check_mode: true
+  diff: true
 
 - name: Remove the gateway (disconnects every initiator)
   croit.ceph.iscsi_gateway:
@@ -118,23 +160,141 @@ gateway:
     - Empty when the gateway does not exist. Shows the state before the change in check mode.
   returned: always
   type: dict
-  sample:
-    serviceId: 7
-    description: VMware datastores
+  contains:
+    serviceId:
+      description: croit service id of the gateway.
+      returned: when the gateway exists
+      type: int
+      sample: 7
+    description:
+      description: Description of the gateway service.
+      returned: when the gateway exists
+      type: str
+      sample: VMware datastores
     servers:
-      - hostname: storage-1
-        serverId: 1
-        ip: 10.10.0.11
-        healthy: true
+      description: Portal servers of the gateway (C(IscsiGatewayServerResponse)), sorted by hostname.
+      returned: when the gateway exists
+      type: list
+      elements: dict
+      contains:
+        hostname:
+          description: Hostname of the portal server.
+          returned: always
+          type: str
+          sample: storage-1
+        serverId:
+          description: croit id of the portal server.
+          returned: always
+          type: int
+          sample: 1
+        ip:
+          description: Client-facing IP address of the portal.
+          returned: always
+          type: str
+          sample: 10.10.0.11
+        healthy:
+          description: Whether the gateway is healthy on that server.
+          returned: always
+          type: bool
+          sample: true
 config:
   description:
-    - The ceph-iscsi configuration (C(IscsiGatewayConfig) in the croit API), with CHAP passwords masked.
-  returned: when the gateway exists
+    - The ceph-iscsi configuration of the gateway (C(IscsiGatewayConfig) in the croit API) after the change.
+    - CHAP passwords in C(clients) are masked as C(********).
+  returned: when the gateway exists after the run
   type: dict
+  contains:
+    iqn:
+      description: IQN of the target in the ceph-iscsi configuration.
+      returned: always
+      type: str
+      sample: iqn.2001-07.com.ceph:1700000000000
+    selectedTarget:
+      description: Target IQN croit manages, see O(target).
+      returned: always
+      type: str
+      sample: iqn.2001-07.com.ceph:1700000000000
+    targets:
+      description: Every target IQN the ceph-iscsi configuration carries.
+      returned: always
+      type: list
+      elements: str
+      sample: [iqn.2001-07.com.ceph:1700000000000]
+    gateways:
+      description: Gateways of the target, each with C(name) and C(ip).
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - name: storage-1
+          ip: 10.10.0.11
+    clients:
+      description: Initiators with their CHAP credentials (password masked), host group and disks.
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - name: iqn.1998-01.com.vmware:esx01-12345678
+          username: esx01-user
+          password: "********"
+          group: ""
+          luns: []
+    groups:
+      description: Host groups with their C(members) and disks (C(luns)).
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - name: esx-cluster
+          members: [iqn.1998-01.com.vmware:esx01-12345678]
+          luns: []
+    disks:
+      description: Exported disks, each with C(pool), C(image) and C(wwn).
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - pool: iscsi
+          image: datastore1
+          wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
+    gatewayVersion:
+      description: Version counter of the ceph-iscsi configuration.
+      returned: always
+      type: int
+      sample: 12
 task:
-  description: The last croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Add iSCSI gateway
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

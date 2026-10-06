@@ -18,6 +18,9 @@ short_description: Read the disks of a croit cluster
 version_added: 0.1.0
 description:
   - Returns the disks croit's nodes have reported, with their role, SMART health and Ceph usage.
+  - The filters O(server), O(roles), O(device_classes) and O(include_missing) combine; with none set,
+    every disk of the cluster is returned.
+  - Read-only; it never changes anything and always reports no change.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -28,10 +31,18 @@ attributes:
     support: full
   diff_mode:
     support: N/A
+seealso:
+  - module: croit.ceph.osd
+    description: Create OSDs on unassigned disks.
+  - module: croit.ceph.server_info
+    description: Read the servers the disks belong to.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
-      - Only return the disks of this server, by hostname or numeric id.
+      - Only return the disks of this server, by hostname or numeric id. An unknown server fails the task.
     type: str
   roles:
     description:
@@ -41,18 +52,20 @@ options:
     choices: [unassigned, mon, osd, journal, other, raid, deleting, updating, mon_unused, old_osd, old_mon, boot]
   device_classes:
     description:
-      - Only return disks of these device classes.
+      - Only return disks of these device classes, as croit detected them.
     type: list
     elements: str
     choices: [hdd, ssd, nvme, pmem]
   include_missing:
     description:
-      - Also return disks the node no longer sees.
+      - Also return disks the node no longer sees (C(missing) is V(true) for those).
     type: bool
     default: true
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Free SSDs on one node
   croit.ceph.disk_info:
     server: storage-07
@@ -60,31 +73,81 @@ EXAMPLES = r"""
     device_classes: [ssd, nvme]
   register: free
 
-- name: Disks that disappeared
+- name: Show the device paths of the free disks
+  ansible.builtin.debug:
+    msg: "{{ free.disks | map(attribute='path') | list }}"
+
+- name: Every disk of the cluster
   croit.ceph.disk_info:
   register: all_disks
 
-- name: Show missing disks
+- name: Show the serials of disks that disappeared
   ansible.builtin.debug:
     msg: "{{ all_disks.disks | selectattr('missing') | map(attribute='serial') | list }}"
 """
 
 RETURN = r"""
 disks:
-  description: The disks (C(DiskResponse) in the croit API).
+  description: The disks that match the filters (C(DiskResponse) in the croit API).
   returned: always
   type: list
   elements: dict
-  sample:
-    - id: 31
-      hostname: storage-07
-      server: 7
-      role: unassigned
-      deviceClass: ssd
-      size: 1920383410176
-      serial: S4EVNX0R123456
-      path: /dev/sdc
-      missing: false
+  contains:
+    id:
+      description: croit's numeric disk id.
+      returned: always
+      type: int
+      sample: 31
+    server:
+      description: croit id of the server the disk is in.
+      returned: always
+      type: int
+      sample: 7
+    hostname:
+      description: Hostname of the server the disk is in.
+      returned: always
+      type: str
+      sample: storage-07
+    path:
+      description: Device path on the node, or null.
+      returned: always
+      type: str
+      sample: /dev/sdc
+    serial:
+      description: Serial number.
+      returned: always
+      type: str
+      sample: S4EVNX0R123456
+    wwn:
+      description: World wide name, or null.
+      returned: always
+      type: str
+      sample: "0x5002538e40a1b2c3"
+    size:
+      description: Size in bytes.
+      returned: always
+      type: int
+      sample: 1920383410176
+    role:
+      description: What the disk is used for, for example V(unassigned), V(osd) or V(mon).
+      returned: always
+      type: str
+      sample: unassigned
+    deviceClass:
+      description: V(hdd), V(ssd), V(nvme) or V(pmem).
+      returned: always
+      type: str
+      sample: ssd
+    osdId:
+      description: Id of the OSD on the disk, or null.
+      returned: always
+      type: int
+      sample: null
+    missing:
+      description: Whether the node no longer sees the disk.
+      returned: always
+      type: bool
+      sample: false
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -25,11 +25,14 @@ module: nfs_cluster
 short_description: Manage NFS gateway clusters on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete croit NFS gateway clusters (nfs-ganesha or croit-nfs) that export CephFS.
-  - A cluster is identified by O(name), which croit stores as the cluster's description.
-  - Manages the member servers, the NFS implementation and, for croit-nfs, the floating virtual IPs.
-  - Exports are managed with M(croit.ceph.nfs_export).
-  - Only options that are set are managed; anything left out keeps its current value.
+  - Create, update and delete croit NFS gateway clusters, which export CephFS over NFS with either nfs-ganesha or croit-nfs.
+  - A cluster is identified by O(name), which croit stores as the cluster's description. croit offers no rename, so a
+    different O(name) creates a new cluster.
+  - The module manages the member servers, the NFS implementation and, for croit-nfs clusters, the floating virtual IPs
+    and the interfaces they are bound on. Exports are managed with M(croit.ceph.nfs_export).
+  - Options that are not set keep their current value.
+  - Deleting a cluster disconnects every NFS client of it and needs O(confirm_delete=true); switching the implementation
+    of an existing cluster restarts its NFS service and needs O(confirm_action=true).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -45,21 +48,21 @@ attributes:
 options:
   name:
     description:
-      - Name of the NFS cluster (its croit description). Must be unique.
+      - Name of the NFS cluster, stored as its croit description. It must be unique among the NFS clusters.
     type: str
     required: true
   state:
     description:
       - Whether the NFS cluster should exist.
-      - V(absent) removes the gateways from every server, which disconnects B(every NFS client) of the cluster,
-        and needs O(confirm_delete=true). The exported CephFS data is not touched.
+      - V(absent) removes the gateways from every server, which disconnects B(every NFS client) of the cluster, and needs
+        O(confirm_delete=true). The exported CephFS data is not touched.
     type: str
     choices: [present, absent]
     default: present
   servers:
     description:
-      - The complete list of servers running the cluster, by hostname or croit id.
-      - Required to create a cluster. A server dropped from the list stops serving NFS.
+      - The complete list of servers running the cluster, by hostname or croit server id. Order does not matter.
+      - Required to create a cluster. A server dropped from the list stops serving NFS; an empty list is refused.
     type: list
     elements: str
   implementation:
@@ -67,42 +70,52 @@ options:
       - NFS implementation serving the cluster. croit uses V(ganesha) when a cluster is created without it.
       - Switching an existing cluster restarts the NFS service, briefly interrupting connected clients, and needs
         O(confirm_action=true). Exports are kept.
+      - O(vips) and O(vip_interfaces) need V(croit_nfs); nfs-ganesha clusters get floating IPs from M(croit.ceph.ha_group).
     type: str
     choices: [ganesha, croit_nfs]
   vip_reconciliation:
     description:
-      - Only used when switching back to V(ganesha) while the croit-nfs virtual IP differs from the dormant HA group's.
-      - V(adopt) moves the HA group to the croit-nfs VIP, V(keep) keeps the group's own VIP.
+      - Which virtual IP to keep when switching an existing cluster back to V(ganesha) while the croit-nfs virtual IP
+        differs from the one of the dormant HA group left by an earlier switch.
+      - V(adopt) moves the HA group to the croit-nfs virtual IP, V(keep) keeps the HA group's own virtual IP.
+      - Only sent together with an O(implementation) switch; ignored otherwise.
     type: str
     choices: [adopt, keep]
   vips:
     description:
-      - Every floating virtual IP the cluster should serve, for example V(10.0.0.250/24). Order does not matter.
-      - Only for V(croit_nfs) clusters with at least two servers; nfs-ganesha clusters use M(croit.ceph.ha_group).
-      - An empty list removes all virtual IPs; connected clients of removed addresses are disconnected.
+      - Every floating virtual IP the cluster should serve, with or without prefix length, for example V(10.0.0.250/24).
+        Order and address notation do not matter.
+      - Only for V(croit_nfs) clusters with at least two servers.
+      - An empty list removes all virtual IPs; clients connected through a removed address are disconnected.
+      - When not set, the configured virtual IPs are left alone.
     type: list
     elements: str
   vip_interfaces:
     description:
-      - The complete list of interfaces the members bind virtual IPs on, one per server.
-      - Needed together with O(vips) when virtual IPs are first configured.
+      - The complete list of interfaces the cluster members bind virtual IPs on, with at most one interface per server.
+      - Required together with O(vips) when virtual IPs are first configured, including on a new cluster. When not set,
+        the configured interfaces are kept.
     type: list
     elements: dict
     suboptions:
       server:
-        description: Server hostname or croit id.
+        description:
+          - Server hostname or croit server id.
         type: str
         required: true
       nic:
-        description: Interface by croit name, Linux name, MAC address or croit id.
+        description:
+          - Interface by croit name, Linux name, MAC address or croit interface id.
         type: str
         required: true
       vlan:
-        description: VLAN tag on the interface; leave unset for the untagged interface.
+        description:
+          - VLAN tag of a VLAN on the interface to bind the virtual IPs on. Leave unset for the untagged interface.
         type: int
   confirm_action:
     description:
       - Must be V(true) to switch the O(implementation) of an existing cluster, which restarts its NFS service.
+      - Not needed when a cluster is created or when the implementation does not change.
     type: bool
     default: false
   confirm_delete:
@@ -112,11 +125,29 @@ options:
     type: bool
     default: false
 notes:
-  - Croit offers no rename; changing O(name) creates a new cluster.
+  - Deleting a cluster or removing virtual IPs disconnects NFS clients; the CephFS data behind the exports is never touched.
+  - With O(wait=false), virtual IPs of a new cluster are configured on a later run, once croit lists the cluster.
+  - The cluster's name is croit's description and VLANs are sent as croit's VLAN record ids; both follow the croit API
+    reference and have not yet been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.nfs_export
+    description: Manage the exports of an NFS cluster.
+  - module: croit.ceph.nfs_info
+    description: Read NFS clusters, their exports, servers and HA state.
+  - module: croit.ceph.ha_group
+    description: Floating IPs for nfs-ganesha clusters.
+  - name: croit API reference
+    description: The croit REST API this module uses (NFS gateways).
+    link: https://www.croit.io/api-docs
+  - name: CephFS and NFS
+    description: Upstream Ceph documentation on exporting CephFS over NFS.
+    link: https://docs.ceph.com/en/latest/cephfs/nfs/
 """
 
 EXAMPLES = r"""
-- name: croit-nfs cluster on three nodes with two floating IPs
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create a croit-nfs cluster on three nodes with two floating IPs
   croit.ceph.nfs_cluster:
     name: nfs-prod
     implementation: croit_nfs
@@ -131,6 +162,18 @@ EXAMPLES = r"""
   croit.ceph.nfs_cluster:
     name: nfs-prod
     servers: [node1, node2, node3, node4]
+
+- name: Preview a change in check mode and show the diff
+  croit.ceph.nfs_cluster:
+    name: nfs-prod
+    vips: [10.0.0.250/24]
+  check_mode: true
+  diff: true
+  register: preview
+
+- name: Show the cluster's service id
+  ansible.builtin.debug:
+    msg: "nfs-prod is croit service {{ preview.cluster.serviceId }}"
 
 - name: Switch an existing cluster to croit-nfs (restarts the NFS service)
   croit.ceph.nfs_cluster:
@@ -148,23 +191,100 @@ EXAMPLES = r"""
 RETURN = r"""
 cluster:
   description:
-    - The cluster as croit reports it after the change (C(NfsGatewayService) plus C(serviceId), C(description)
-      and C(implementation)). Before the change in check mode; empty when the cluster does not exist.
+    - The cluster as croit reports it after the change (C(NfsGatewayService) plus C(serviceId), C(description) and
+      C(implementation)).
+    - In check mode the cluster before the change. Empty when the cluster does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    serviceId: 41
-    description: nfs-prod
-    implementation: croit_nfs
-    servers: [1, 2, 3]
+  contains:
+    serviceId:
+      description: croit's id of the NFS service.
+      returned: when the cluster exists
+      type: int
+      sample: 41
+    description:
+      description: The cluster's name (O(name)).
+      returned: when the cluster exists
+      type: str
+      sample: nfs-prod
+    implementation:
+      description: NFS implementation serving the cluster.
+      returned: when the cluster exists
+      type: str
+      sample: croit_nfs
+    servers:
+      description: croit server ids of the members.
+      returned: when the cluster exists
+      type: list
+      elements: int
+      sample: [1, 2, 3]
+    exports:
+      description: The cluster's exports (C(NfsGatewayExport)); see M(croit.ceph.nfs_export).
+      returned: when the cluster exists
+      type: list
+      elements: dict
+      sample: [{id: 7, nfsPath: /projects, path: /volumes/_nogroup/projects, volume: null}]
 ha:
-  description: The croit-nfs HA view (C(CroitNfsHaView)) after the change, when O(vips) or O(vip_interfaces) is set.
+  description:
+    - The croit-nfs HA view (C(CroitNfsHaView)) after the change.
   returned: when O(vips) or O(vip_interfaces) is set and the cluster exists
   type: dict
+  contains:
+    vips:
+      description: Every virtual IP configured on the cluster.
+      returned: always
+      type: list
+      elements: str
+      sample: [10.0.0.250/24, 10.0.0.251/24]
+    members:
+      description:
+        - One entry per member with C(server), C(nic), C(vlan) (croit's VLAN record id), C(serviceRunning),
+          C(raftRole) and C(vipsHeld).
+      returned: always
+      type: list
+      elements: dict
+      sample: [{server: 1, nic: 4, vlan: null, serviceRunning: true, raftRole: leader, vipsHeld: [10.0.0.250/24]}]
+    haPossible:
+      description: Whether the cluster has enough members to serve virtual IPs.
+      returned: always
+      type: bool
+      sample: true
+    minimumMembers:
+      description: Members needed before virtual IPs can be configured.
+      returned: always
+      type: int
+      sample: 2
+    quorumHealthy:
+      description: Whether croit-nfs reports its quorum as healthy; null when no member could be read.
+      returned: always
+      type: bool
+      sample: true
 task:
-  description: The last croit background task the change ran as.
+  description:
+    - The last croit background task the change ran as, for example the cluster creation or the implementation switch.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: croit's task id.
+      returned: always
+      type: int
+      sample: 512
+    name:
+      description: What the task did.
+      returned: always
+      type: str
+      sample: Create NFS cluster
+    state:
+      description: Final state of the task, one of C(FINISHED), C(FAILED), C(CANCELED), or C(RUNNING) with O(wait=false).
+      returned: always
+      type: str
+      sample: FINISHED
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "Deploying NFS gateway on node1 ... done"
 """
 
 import ipaddress

@@ -20,9 +20,11 @@ module: config_backup
 short_description: Manage croit configuration backups
 version_added: 0.1.0
 description:
-  - Turns croit's daily cloud configuration backups on or off, configures backups to an S3 bucket of
-    your own, and optionally takes a backup now.
-  - Only options that are set are managed; anything left out keeps its current value.
+  - Turns croit's cloud configuration backups on or off, configures backups to an S3 bucket of your own, and
+    optionally takes a backup now.
+  - The backup configuration exists once per cluster, so the module has no C(state) option. Only options that are set
+    are managed; anything left out keeps its current value, and settings are only written when they differ.
+  - Enabling S3 backups without a stored or supplied secret key fails before anything is written.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -37,41 +39,45 @@ attributes:
       - O(run_now) is reported as a change and skipped in check mode.
   diff_mode:
     support: full
+    details:
+      - The S3 secret key shows as C(********), or C(******** (changed)) when it will be replaced.
 options:
   cloud_enabled:
     description:
-      - Whether croit uploads an encrypted copy of its configuration to croit's API daily and before
-        every update. Needs a registered cluster with a route to croit's API.
+      - Whether croit uploads an encrypted copy of its configuration to croit's API daily and before every
+        update. Needs a registered cluster with a route to croit's API.
+      - When not set, the cloud backup setting is left alone.
     type: bool
   s3:
     description:
-      - Backups to an S3 bucket of your own, for a cluster that cannot reach croit's API.
-      - Only the sub-options that are set are managed.
+      - Backups to an S3 bucket of your own, for example for a cluster that cannot reach croit's API.
+      - Only the sub-options that are set are managed; the others keep their current value.
     type: dict
     suboptions:
       enabled:
         description:
-          - Whether S3 backups are enabled. Enabling makes croit write and remove a test object first,
-            and fails when it cannot.
+          - Whether S3 backups are enabled. Enabling makes croit write and remove a test object first, and fails
+            when it cannot.
         type: bool
       endpoint:
-        description: S3 endpoint URL. An empty string clears it.
+        description: S3 endpoint URL, for example V(https://s3.example.internal). An empty string clears it.
         type: str
       bucket:
-        description: Bucket to upload to. An empty string clears it.
+        description: Bucket the backups are uploaded to. An empty string clears it.
         type: str
       prefix:
-        description: Object key prefix. An empty string clears it.
+        description: Object key prefix for the backups, for example V(cluster-a/). An empty string clears it.
         type: str
       region:
-        description: S3 region. An empty string clears it.
+        description: S3 region of the bucket. An empty string clears it.
         type: str
       access_key:
-        description: S3 access key. An empty string clears it.
+        description: S3 access key croit uploads with. An empty string clears it.
         type: str
       secret_key:
         description:
-          - S3 secret key. croit never returns it, so it cannot be compared; see O(s3.update_secret).
+          - S3 secret key croit uploads with. croit never returns it, so it cannot be compared; see
+            O(s3.update_secret).
         type: str
       update_secret:
         description:
@@ -82,24 +88,40 @@ options:
         default: on_create
       encrypt:
         description:
-          - Encrypt the uploaded backups with the cloud backup encryption key. A restore then needs that key.
+          - Encrypt the uploaded backups with the cloud backup encryption key. A restore then needs that key, see
+            O(return_encryption_key).
         type: bool
   run_now:
     description:
-      - Take a backup now, after applying the settings, to croit's API (V(cloud)) and/or the S3 bucket (V(s3)).
+      - Take a backup now, after applying the settings, to croit's API (V(cloud)) and/or the S3 bucket (V(s3)), in
+        the order listed.
       - This is an action, not a state. It always reports a change and is skipped in check mode.
     type: list
     elements: str
     choices: [cloud, s3]
   return_encryption_key:
     description:
-      - Include the cloud backup encryption key in RV(cloud). It is needed to restore an encrypted backup,
-        so keep it somewhere other than this cluster, and treat it as a secret.
+      - Include the cloud backup encryption key in RV(cloud). It is needed to restore an encrypted backup, so keep
+        it somewhere other than this cluster, and treat it as a secret (set C(no_log) on the task).
+      - With V(false), the key is removed from RV(cloud).
     type: bool
     default: false
+notes:
+  - Without the encryption key an encrypted backup cannot be restored. Fetch it once with
+    O(return_encryption_key=true) and store it outside the cluster.
+  - croit's warning about an S3 endpoint certificate it cannot verify goes through O(ignore_warnings).
+seealso:
+  - module: croit.ceph.s3_bucket
+    description: Create a bucket on a croit cluster to hold another cluster's backups.
+  - module: croit.ceph.task
+    description: Follow a backup started with O(wait=false).
+  - name: croit API reference
+    description: The C(/maintenance/config-backups) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: Enable cloud backups
   croit.ceph.config_backup:
     cloud_enabled: true
@@ -115,38 +137,149 @@ EXAMPLES = r"""
       secret_key: "{{ vault_backup_secret }}"
       encrypt: false
     run_now: [s3]
+  register: backup
+
+- name: Show when the backup finished
+  ansible.builtin.debug:
+    msg: "S3 backup task {{ backup.task.id }} ended as {{ backup.task.state }}"
+  when: backup.task is defined
+
+- name: Fetch the encryption key once and keep it safe
+  croit.ceph.config_backup:
+    return_encryption_key: true
+  register: backup_key
+  no_log: true
+
+- name: Rotate the S3 secret key
+  croit.ceph.config_backup:
+    s3:
+      secret_key: "{{ vault_new_backup_secret }}"
+      update_secret: always
 """
 
 RETURN = r"""
 cloud:
   description:
-    - Cloud backup status (C(CloudConfigBackupStatus) in the croit API) after the change.
-    - C(backupEncryptionKey) is only included with O(return_encryption_key=true).
+    - Cloud backup status (C(CloudConfigBackupStatus) in the croit API) after the change; in check mode, before
+      it.
   returned: always
   type: dict
-  sample:
-    enabled: true
-    clusterId: 8a9e0c5e-3f4b-4f0e-9e43-5c8f1a2b3c4d
-    lastBackupTimestamp: "2026-10-06T02:00:00Z"
+  contains:
+    enabled:
+      description: Whether cloud configuration backups are enabled.
+      returned: always
+      type: bool
+      sample: true
+    clusterId:
+      description: The id croit knows this installation by.
+      returned: always
+      type: str
+      sample: 8a9e0c5e-3f4b-4f0e-9e43-5c8f1a2b3c4d
+    lastBackupTimestamp:
+      description: When the last backup was taken, or null if never.
+      returned: always
+      type: str
+      sample: "2026-10-06T02:00:00Z"
+    lastBackupSize:
+      description: Size of the last backup in bytes, or null if never.
+      returned: always
+      type: int
+      sample: 48211
+    backupEncryptionKey:
+      description: The key every backup is encrypted with.
+      returned: when O(return_encryption_key=true)
+      type: str
+      sample: "********"
 s3:
-  description: S3 backup status (C(S3ConfigBackupStatus) in the croit API) after the change. Never contains the secret key.
+  description:
+    - S3 backup status (C(S3ConfigBackupStatus) in the croit API) after the change; in check mode, before it.
+    - It never contains the secret key, only whether one is stored.
   returned: always
   type: dict
-  sample:
-    enabled: true
-    endpoint: https://s3.example.internal
-    bucket: croit-backups
-    secretKeySet: true
-    encrypt: false
+  contains:
+    enabled:
+      description: Whether S3 configuration backups are enabled.
+      returned: always
+      type: bool
+      sample: true
+    endpoint:
+      description: S3 endpoint URL, or null.
+      returned: always
+      type: str
+      sample: https://s3.example.internal
+    bucket:
+      description: Bucket the backups go to, or null.
+      returned: always
+      type: str
+      sample: croit-backups
+    prefix:
+      description: Object key prefix, or null.
+      returned: always
+      type: str
+      sample: cluster-a/
+    region:
+      description: S3 region, or null.
+      returned: always
+      type: str
+      sample: us-east-1
+    accessKey:
+      description: S3 access key, or null.
+      returned: always
+      type: str
+      sample: AKIAEXAMPLE
+    secretKeySet:
+      description: Whether a secret key is stored.
+      returned: always
+      type: bool
+      sample: true
+    encrypt:
+      description: Whether backups are encrypted with the cloud backup encryption key.
+      returned: always
+      type: bool
+      sample: false
 tasks:
   description: The croit tasks the backups taken with O(run_now) ran as, in the order of O(run_now).
   returned: when O(run_now) is set and not in check mode
   type: list
   elements: dict
+  sample:
+    - id: 512
+      name: Config backup to S3
+      state: FINISHED
+      done: true
 task:
-  description: The croit task of the last backup taken with O(run_now), the same as the last item of RV(tasks).
+  description:
+    - The croit task of the last backup taken with O(run_now), the same as the last item of RV(tasks).
+    - With O(wait=true) this is the finished task. With O(wait=false) it can still be running; follow it with
+      M(croit.ceph.task).
   returned: when O(run_now) is set and not in check mode
   type: dict
+  contains:
+    id:
+      description: The task's id, which M(croit.ceph.task) and M(croit.ceph.task_info) accept.
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Set ceph config
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule

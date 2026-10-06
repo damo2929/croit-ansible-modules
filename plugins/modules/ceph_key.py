@@ -20,11 +20,15 @@ short_description: Manage Ceph keys (cephx users) on a croit cluster
 version_added: 0.1.0
 description:
   - Create, update and delete Ceph keys (cephx users such as C(client.backup)) through the croit API.
+    A key is identified by its fully qualified entity name O(name).
   - Capabilities are given per daemon type as the strings ceph stores, for example
-    C(profile rbd pool=vms). They are compared ignoring whitespace differences.
-  - Only options that are set are managed. When O(caps) is set it is the key's B(complete) set of
-    capabilities, as with C(ceph auth caps); daemon types left out of it get no capabilities.
-  - The key secret is never part of the diff or the result, unless O(return_keyring=true).
+    C(profile rbd pool=vms). They are compared ignoring whitespace differences, so reformatting a
+    capability string does not report a change.
+  - Only options that are set are managed; options left unset keep their current value. When O(caps)
+    is set it is the key's B(complete) set of capabilities, as with C(ceph auth caps); daemon types left
+    out of it get no capabilities.
+  - The key secret is never part of the diff or of RV(key). It is only returned, in RV(keyring), when
+    O(return_keyring=true).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -39,7 +43,8 @@ attributes:
 options:
   name:
     description:
-      - Fully qualified ceph entity name, for example V(client.backup).
+      - Fully qualified ceph entity name of the key, for example V(client.backup).
+      - The name must contain a dot (C(<type>.<id>)); a bare name such as V(backup) fails.
     type: str
     required: true
   state:
@@ -52,10 +57,10 @@ options:
     default: present
   caps:
     description:
-      - Capabilities of the key per daemon type. This is the complete set; daemon types not listed get
-        no capabilities.
+      - Capabilities of the key per daemon type. This is the complete set; daemon types not listed, or
+        set to an empty value, get no capabilities.
       - When not set, the capabilities of an existing key are left alone, and a new key is created
-        without any.
+        without any capabilities.
     type: dict
     suboptions:
       mon:
@@ -72,7 +77,9 @@ options:
         type: str
   comment:
     description:
-      - Free text croit keeps about what the key is for.
+      - Free text croit keeps about what the key is for. Ceph itself does not store it.
+      - When not set, the comment is left alone, and a new key is created with an empty comment.
+        V("") clears the comment.
     type: str
   key_type:
     description:
@@ -84,16 +91,33 @@ options:
   return_keyring:
     description:
       - Return the key's keyring file in RV(keyring). It contains the secret, so keep the result out
-        of logs (for example with C(no_log) on the task).
+        of logs, for example with C(no_log) on the task.
       - Never done in check mode for a key that does not exist yet.
     type: bool
     default: false
 notes:
+  - Deleting a key cuts off every client that uses it, immediately. There is no confirmation option,
+    because no data is lost, but the secret cannot be recovered.
   - croit warns before changing or deleting system keys (for example C(client.admin)); see
     O(ignore_warnings).
+  - It is assumed that a capability change which leaves out a daemon type removes that daemon type's
+    capabilities, like C(ceph auth caps). This has not been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.ceph_key_info
+    description: List Ceph keys and their capabilities.
+  - module: croit.ceph.pool
+    description: Manage the pools the capabilities refer to.
+  - name: croit API reference
+    description: The croit REST API, including the C(/keys) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: Ceph user management
+    description: Upstream documentation of cephx users and capabilities.
+    link: https://docs.ceph.com/en/latest/rados/operations/user-management/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Key for an RBD client
   croit.ceph.ceph_key:
     name: client.vms
@@ -103,7 +127,20 @@ EXAMPLES = r"""
       osd: profile rbd pool=vms
       mgr: profile rbd pool=vms
 
-- name: Fetch its keyring for distribution
+- name: Restrict a CephFS client to one directory
+  croit.ceph.ceph_key:
+    name: client.data
+    caps:
+      mon: allow r
+      mds: allow rw path=/data
+      osd: allow rw tag cephfs data=cephfs
+
+- name: Change only the comment, keeping the capabilities
+  croit.ceph.ceph_key:
+    name: client.vms
+    comment: KVM hypervisors (rack 3)
+
+- name: Fetch the keyring for distribution
   croit.ceph.ceph_key:
     name: client.vms
     return_keyring: true
@@ -119,7 +156,7 @@ EXAMPLES = r"""
   loop: "{{ groups['hypervisors'] }}"
   no_log: true
 
-- name: Remove a key
+- name: Remove a key that is no longer used
   croit.ceph.ceph_key:
     name: client.old
     state: absent
@@ -133,27 +170,53 @@ key:
     - Before the change in check mode; empty when the key does not exist.
   returned: always
   type: dict
-  sample:
-    user: client.vms
-    comment: Hypervisors
+  contains:
+    user:
+      description: The ceph entity name.
+      returned: when the key exists
+      type: str
+      sample: client.vms
+    comment:
+      description: What croit was told the key is for.
+      returned: when the key exists
+      type: str
+      sample: Hypervisors
     rawPermissions:
-      mon: profile rbd
-      osd: profile rbd pool=vms
+      description: The capability strings ceph stores, per daemon type. A daemon type without capabilities is null.
+      returned: when the key exists
+      type: dict
+      sample:
+        mon: profile rbd
+        osd: profile rbd pool=vms
+        mgr: profile rbd pool=vms
+        mds: null
+    permissions:
+      description: The capabilities in whichever structured shape croit could read them as; C(type) says which.
+      returned: when the key exists
+      type: dict
+      sample:
+        type: RbdCephPermissions
 keyring:
-  description: The key's keyring file.
+  description:
+    - The key's keyring file. It contains the secret; keep it out of logs with C(no_log).
   returned: when O(return_keyring=true) and the key exists
   type: dict
   contains:
     file_name:
       description: Name to save the file as.
+      returned: always
       type: str
       sample: ceph.client.vms.keyring
     contents:
-      description: The keyring, including the secret. Only when croit answers small files inline.
+      description: The keyring, including the secret. Only present when croit answers small files inline; null otherwise.
+      returned: always
       type: str
+      sample: "[client.vms]\n\tkey = ********\n"
     url:
-      description: Expiring download link to the keyring.
+      description: Expiring croit download link to the keyring.
+      returned: always
       type: str
+      sample: https://croit-mgmt/api/download/3f2a9c
 """
 
 import re

@@ -19,12 +19,14 @@ module: crush_rule
 short_description: Manage CRUSH rules on a croit cluster
 version_added: 0.1.0
 description:
-  - Create and delete CRUSH rules through the croit API.
+  - Create and delete CRUSH rules through the croit API. A rule is identified by its O(name).
   - Two kinds of rule can be created. V(simple) takes one bucket and spreads copies over a failure domain.
     V(ssd_primary) places the first copies on one device class and the rest on another.
   - CRUSH rules cannot be changed in place. When an existing rule differs from the options that are set,
     the task fails instead of deleting and recreating the rule, because pools may be placed with it.
-  - Only the options that are set are compared with an existing rule.
+  - Only the options that are set are compared with an existing rule, so a task with only O(name)
+    just makes sure the rule exists. O(type) is inferred from the options, so any C(ssd_*) or C(hdd_*)
+    option means V(ssd_primary). Mixing options of both kinds fails the task.
   - Editing the CRUSH map itself (moving buckets, change requests) is out of scope.
 author:
   - Damien Dye (@damo2929)
@@ -40,7 +42,8 @@ attributes:
 options:
   name:
     description:
-      - Name of the CRUSH rule.
+      - Name of the CRUSH rule, for example V(replicated_ssd). Pools refer to the rule by name or id
+        (see M(croit.ceph.pool)).
     type: str
     required: true
   state:
@@ -52,7 +55,9 @@ options:
     default: present
   type:
     description:
-      - Kind of rule. Compared with an existing rule only when set; V(simple) is used when creating.
+      - Kind of rule. When not set, it is inferred from the other options; V(simple) is used when
+        creating a rule without any C(ssd_*) or C(hdd_*) option.
+      - Compared with an existing rule only when set.
     type: str
     choices: [simple, ssd_primary]
   start_bucket:
@@ -72,6 +77,7 @@ options:
   erasure_coding:
     description:
       - For O(type=simple), create a rule for erasure coded pools instead of replicated ones.
+        A replicated rule is created when not set.
     type: bool
   ssd_start_bucket:
     description:
@@ -87,7 +93,8 @@ options:
     type: str
   ssd_copies:
     description:
-      - For O(type=ssd_primary), how many copies go on the fast device class.
+      - For O(type=ssd_primary), how many copies go on the fast device class. The rest go on
+        O(hdd_device_class).
     type: int
   hdd_start_bucket:
     description:
@@ -101,14 +108,39 @@ options:
     description:
       - For O(type=ssd_primary), the device class of the other copies, for example V(hdd).
     type: str
+notes:
+  - Rules created outside this module, with any other layout, are reported with C(type=custom) in
+    RV(layout). Their existence can be checked, but setting any placement option for them fails.
+  - It is assumed that croit reports a class-pinned C(take) step as a bucket plus a device class, and
+    that a simple rule has exactly one C(take) ... C(emit) group. This has not been verified against a
+    live croit cluster.
+seealso:
+  - module: croit.ceph.crush_info
+    description: Read CRUSH rules, device classes, erasure code profiles and the CRUSH tree.
+  - module: croit.ceph.pool
+    description: Place pools with a CRUSH rule.
+  - name: croit API reference
+    description: The croit REST API, including the C(/crush/rules) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: CRUSH maps
+    description: Upstream documentation of CRUSH maps and rules.
+    link: https://docs.ceph.com/en/latest/rados/operations/crush-map/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Replicated rule on SSDs, one copy per host
   croit.ceph.crush_rule:
     name: replicated_ssd
     failure_domain: host
     device_class: ssd
+  register: ssd_rule
+
+- name: Place a pool with it, by the id croit assigned
+  croit.ceph.pool:
+    name: rbd-ssd
+    crush_rule: "{{ ssd_rule.rule.id }}"
 
 - name: Rule for erasure coded pools on HDDs, spread over racks
   croit.ceph.crush_rule:
@@ -138,21 +170,36 @@ rule:
     - Empty when the rule does not exist, or before it is created in check mode.
   returned: always
   type: dict
-  sample:
-    id: 2
-    name: replicated_ssd
-    type: REPLICATED
+  contains:
+    id:
+      description: The rule's id, which pools refer to.
+      returned: when the rule exists
+      type: int
+      sample: 2
+    name:
+      description: The rule's name.
+      returned: when the rule exists
+      type: str
+      sample: replicated_ssd
+    type:
+      description: Whether the rule places replicas (C(REPLICATED)) or erasure coded chunks (C(ERASURE)).
+      returned: when the rule exists
+      type: str
+      sample: REPLICATED
     steps:
-      - op: TAKE
-        bucket: default
-        deviceClass: ssd
-      - op: CHOOSELEAF
-        bucketType: host
-        num: 0
-      - op: EMIT
+      description: The rule's steps in order, each with C(op) and, depending on it, C(bucket), C(deviceClass), C(bucketType) and C(num).
+      returned: when the rule exists
+      type: list
+      elements: dict
+      sample:
+        - {op: TAKE, bucket: default, deviceClass: ssd}
+        - {op: CHOOSELEAF, bucketType: host, num: 0}
+        - {op: EMIT}
 layout:
-  description: The rule's placement as this module's options, derived from its steps.
-  returned: when the rule exists
+  description:
+    - The rule's placement expressed as this module's options, derived from its steps. C(type) is
+      V(custom) for layouts this module cannot create.
+  returned: when the rule exists and the task did not run in check mode
   type: dict
   sample:
     type: simple

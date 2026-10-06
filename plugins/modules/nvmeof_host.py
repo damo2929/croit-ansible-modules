@@ -76,9 +76,28 @@ options:
         M(croit.ceph.nvmeof_subsystem) and O(croit.ceph.nvmeof_subsystem#module:exclusive=true).
     type: list
     elements: str
+seealso:
+  - module: croit.ceph.nvmeof_subsystem
+    description: Attach and detach hosts on a subsystem.
+  - module: croit.ceph.nvmeof_gateway
+    description: Manage the NVMe-oF cluster.
+  - module: croit.ceph.nvmeof_info
+    description: Read the allowed hosts.
+  - name: Ceph NVMe-oF gateway
+    description: Upstream documentation of the Ceph NVMe over Fabrics gateway.
+    link: https://docs.ceph.com/en/latest/rbd/nvmeof-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - The shared key is never returned. RV(host.sharedKey) is replaced by C(********), and the key never appears in
+    the diff.
+  - Revoking a host affects only that initiator, so O(state=absent) needs no confirmation.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Allow an ESXi host with a key
   croit.ceph.nvmeof_host:
     gateway: nvme-prod
@@ -86,6 +105,11 @@ EXAMPLES = r"""
     shared_key: "{{ vault_esxi01_dhchap_key }}"
     subsystems:
       - nqn.2016-06.io.spdk:datastore1
+  register: esxi01
+
+- name: Confirm the host authenticates with a key
+  ansible.builtin.assert:
+    that: esxi01.host.hasSharedKey
 
 - name: Rotate the key
   croit.ceph.nvmeof_host:
@@ -104,27 +128,95 @@ EXAMPLES = r"""
 RETURN = r"""
 host:
   description:
-    - The host as croit reports it after the change (C(NvmeOFHostResponse)), with the shared key replaced by
-      C(********).
+    - The host as croit reports it after the change (C(NvmeOFHostResponse) in the croit API), with the shared key
+      replaced by C(********).
     - Before the change in check mode; empty when the host is not allowed.
   returned: always
   type: dict
-  sample:
-    id: 3
-    gatewayId: 1
-    nqn: nqn.2014-08.org.nvmexpress:uuid:esxi-01
-    hasSharedKey: true
-    sharedKey: "********"
-    subsystems: [4]
+  contains:
+    id:
+      description: croit id of the host.
+      returned: when the host is allowed
+      type: int
+      sample: 3
+    gatewayId:
+      description: croit id of the NVMe-oF cluster.
+      returned: when the host is allowed
+      type: int
+      sample: 1
+    nqn:
+      description: Host NQN of the initiator.
+      returned: when the host is allowed
+      type: str
+      sample: nqn.2014-08.org.nvmexpress:uuid:esxi-01
+    hasSharedKey:
+      description: Whether the host has a DH-HMAC-CHAP key.
+      returned: when the host is allowed
+      type: bool
+      sample: true
+    sharedKey:
+      description: Always C(********) when a key is set.
+      returned: when the host is allowed
+      type: str
+      sample: "********"
+    subsystems:
+      description: croit ids of the subsystems the host is attached to.
+      returned: when the host is allowed
+      type: list
+      elements: int
+      sample: [4]
+    disks:
+      description: croit ids of the disks attached to the same subsystems.
+      returned: when the host is allowed
+      type: list
+      elements: int
+      sample: [7, 8]
 task:
-  description: The last croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Add NVMe-oF host
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 tasks:
-  description: Every croit background task the change ran as, in order.
-  returned: when a task ran
+  description:
+    - Every croit background task the change ran as, in the order they ran. Each entry has the same fields as
+      RV(task).
+  returned: when the change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Add NVMe-oF host
+      state: FINISHED
+      done: true
+      output: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

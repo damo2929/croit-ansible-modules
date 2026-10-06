@@ -29,6 +29,7 @@ This is the authoritative design for the `croit.ceph` collection. Read it before
 | 2026-10-06 | Phase 4: gateway helpers live in `module_utils/iscsi.py`, `nvmeof.py` and `smb.py`. `lookup.resolve_interface` resolves server + NIC + VLAN tag to croit records (used by `ha_group`, `nfs_cluster`, `cephfs_guard`, `smb_cluster`). `module.ceil_mib` is the only place sizes are rounded to MiB. |
 | 2026-10-06 | Deleting a gateway disk (iSCSI or NVMe-oF) only stops the export by default. Deleting the RBD image behind it needs `delete_image: true` (plus `confirm_delete`). |
 | 2026-10-06 | One-way or disruptive cluster changes need `confirm_action`: S3 multisite convert, join and promote; the NFS implementation switch; the SMB DNS-name change and generation migration. They are never made in check mode. |
+| 2026-10-06 | Documentation standard (AGENTS.md "Module documentation standard"): every module has `seealso`, fully described options, at least 3 examples (header comment plus `module_defaults`), and RETURN with `returned`, `type` and `contains`/`sample`. Collection docs live in `docs/docsite/` (guides, `links.yml`, `extra-docs.yml`). CI builds the docsite with warnings treated as errors. |
 | 2026-10-06 | The repo keeps `DESIGN.md`, `README.md` and `AGENTS.md` (plus `PLAN.md`) up to date with every change. |
 
 ## 1. What the API tells us (design drivers)
@@ -87,7 +88,9 @@ croit-ansible/  (checked out as ansible_collections/croit/ceph for ansible-test)
 │   ├── integration/integration_config.yml.template
 │   ├── integration/targets/<module>/  # aliases: unsupported (needs a live lab croit)
 │   └── sanity/ignore-*.txt        # only if ever needed; none today
-├── docs/openapi.json              # vendored spec snapshot (drift checks)
+├── CONTRIBUTING.md, SECURITY.md, CODE_OF_CONDUCT.md
+├── docs/docsite/                  # links.yml, extra-docs.yml, rst/ guides (rendered on Galaxy / docsite)
+├── docs/openapi.json              # vendored spec snapshot (drift checks; excluded from the build)
 └── tools/check_spec_drift.py      # flags module endpoints/fields that no longer match the spec
 ```
 
@@ -193,7 +196,7 @@ The collection is built from the start to be published on [Ansible Galaxy](https
 2. `ansible-test units`.
 3. `ansible-lint --profile production`.
 4. **`galaxy-importer`**, the same checker Galaxy runs on upload. It runs on the built tarball (`python -m galaxy_importer.main croit-ceph-X.Y.Z.tar.gz`), so an import can't fail after a tag has been pushed.
-5. `antsibull-docs lint-collection-docs`.
+5. `antsibull-docs lint-collection-docs --plugin-docs`, and a full docsite build (`antsibull-docs sphinx-init` + `build.sh`) with warnings treated as errors.
 6. `antsibull-changelog lint`.
 7. `python tools/check_spec_drift.py`: every `# croit-api:` endpoint declared by a module exists in `docs/openapi.json`.
 

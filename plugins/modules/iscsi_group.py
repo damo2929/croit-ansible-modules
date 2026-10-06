@@ -41,7 +41,7 @@ attributes:
 options:
   name:
     description:
-      - Name of the host group.
+      - Name of the host group on the iSCSI target. This is how the module finds it.
     type: str
     required: true
   state:
@@ -66,11 +66,11 @@ options:
     elements: dict
     suboptions:
       pool:
-        description: RBD pool of the disk.
+        description: RBD pool of the image to map to the group.
         type: str
         required: true
       image:
-        description: RBD image name of the disk.
+        description: RBD image name to map to the group.
         type: str
         required: true
       size:
@@ -91,9 +91,29 @@ options:
     description:
       - croit service id of the iSCSI gateway. Only needed if croit reports more than one.
     type: int
+seealso:
+  - module: croit.ceph.iscsi_client
+    description: Allow the member initiators onto the target first.
+  - module: croit.ceph.iscsi_disk
+    description: Grow, unexport or delete exported disks.
+  - module: croit.ceph.iscsi_info
+    description: List host groups, their members and disks.
+  - module: croit.ceph.iscsi_gateway
+    description: Manage the iSCSI gateway and its target.
+  - name: Ceph iSCSI gateway
+    description: Upstream documentation of the Ceph iSCSI gateway.
+    link: https://docs.ceph.com/en/latest/rbd/iscsi-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - croit warns before removing a group or one of its members. Set O(ignore_warnings=true) to confirm.
+  - Removing a group, a member or a mapping never deletes an RBD image.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: ESXi cluster sharing two datastores
   croit.ceph.iscsi_group:
     name: esx-cluster
@@ -107,6 +127,17 @@ EXAMPLES = r"""
         image: datastore2
         size: 4T
     exclusive: true
+  register: esx_group
+
+- name: Show the members of the group
+  ansible.builtin.debug:
+    msg: "{{ esx_group.group.members }}"
+
+- name: Add a third host, leaving the others alone
+  croit.ceph.iscsi_group:
+    name: esx-cluster
+    members:
+      - iqn.1998-01.com.vmware:esx03-11223344
 
 - name: Remove the group (hosts keep their disks)
   croit.ceph.iscsi_group:
@@ -122,13 +153,27 @@ group:
     - Empty when the group does not exist. Shows the state before the change in check mode.
   returned: always
   type: dict
-  sample:
-    name: esx-cluster
-    members: [iqn.1998-01.com.vmware:esx01-12345678]
+  contains:
+    name:
+      description: Name of the host group.
+      returned: when the group exists
+      type: str
+      sample: esx-cluster
+    members:
+      description: IQNs of the initiators in the group.
+      returned: when the group exists
+      type: list
+      elements: str
+      sample: [iqn.1998-01.com.vmware:esx01-12345678]
     luns:
-      - pool: iscsi
-        image: datastore1
-        wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
+      description: Disks mapped to the group, each with C(pool), C(image) and C(wwn).
+      returned: when the group exists
+      type: list
+      elements: dict
+      sample:
+        - pool: iscsi
+          image: datastore1
+          wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

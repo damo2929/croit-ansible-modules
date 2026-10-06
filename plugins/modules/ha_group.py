@@ -38,6 +38,16 @@ attributes:
     support: full
   diff_mode:
     support: full
+seealso:
+  - module: croit.ceph.rgw_service
+    description: Add the S3 gateways a group fronts with HA Proxy.
+  - module: croit.ceph.nfs_cluster
+    description: croit-nfs clusters manage their own virtual IPs.
+  - module: croit.ceph.server_nic
+    description: Manage the interfaces the virtual IPs move between.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   name:
     description:
@@ -155,12 +165,18 @@ options:
         description: Log every request, not only failed ones.
         type: bool
 notes:
+  - Deleting a group releases its virtual IPs, so clients using them lose access until they are configured
+    elsewhere. No data is lost, so no confirmation is needed.
+  - O(backend) cannot be changed after creation, and the members of a C(keepafloatd) group cannot be
+    changed; croit refuses both, so the module fails instead of recreating the group.
   - Creating or updating a group can make croit ask whether an object gateway may be moved off the port
     HA Proxy needs. The task then waits for an answer; answer it with M(croit.ceph.task) or in the croit UI.
   - The O(servers[].vlan) tag is resolved to croit's VLAN record on the given interface.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: S3 behind HA Proxy on two VIPs
   croit.ceph.ha_group:
     name: s3-frontend
@@ -173,6 +189,11 @@ EXAMPLES = r"""
     haproxy: true
     haproxy_port: 443
     backend_servers: [rgw1, rgw2, rgw3]
+  register: s3_ha
+
+- name: Show where the VIPs are held
+  ansible.builtin.debug:
+    msg: "{{ s3_ha.ha_group.vipHolders }}"
 
 - name: NFS floating IP on a VLAN
   croit.ceph.ha_group:
@@ -185,7 +206,7 @@ EXAMPLES = r"""
     failback: true
     failback_time: 60
 
-- name: Remove a group
+- name: Remove a group (releases its VIPs)
   croit.ceph.ha_group:
     name: nfs-vip
     state: absent
@@ -198,10 +219,79 @@ ha_group:
     - Before the change in check mode; empty when the group does not exist.
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's numeric group id.
+      returned: when the group exists
+      type: int
+      sample: 3
+    description:
+      description: The group's name (O(name)).
+      returned: when the group exists
+      type: str
+      sample: s3-frontend
+    service:
+      description: The service the group fronts.
+      returned: when the group exists
+      type: str
+      sample: rgw
+    backend:
+      description: The HA backend.
+      returned: when the group exists
+      type: str
+      sample: keepafloatd
+    vips:
+      description: The group's virtual IPs.
+      returned: when the group exists
+      type: list
+      elements: str
+      sample: ["10.0.0.100", "10.0.0.101"]
+    servers:
+      description: Member servers, each with croit's C(server), C(nic) and C(vlan) record ids.
+      returned: when the group exists
+      type: list
+      elements: dict
+      sample: [{server: 11, nic: 52, vlan: null}]
+    haproxy:
+      description: Whether HA Proxy fronts the backend servers.
+      returned: when the group exists
+      type: bool
+      sample: true
+    vipHolders:
+      description: Which server currently holds each virtual IP, as croit reports it.
+      returned: when the group exists
+      type: dict
+      sample: {}
 task:
-  description: The croit background task the change ran as.
+  description: The croit background task the change ran as, when there was one (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 import ipaddress

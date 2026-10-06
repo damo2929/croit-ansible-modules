@@ -19,10 +19,12 @@ module: cephfs_subvolume_group
 short_description: Manage CephFS subvolume groups on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, resize and delete CephFS subvolume groups through the croit API.
+  - Create, resize and delete CephFS subvolume groups through the croit API. A group is identified by
+    O(volume) and O(name).
   - Only options that are set are managed; anything left out keeps its current value.
-  - O(uid), O(gid), O(mode) and O(pool_layout) can only be set when the group is created. They are compared
-    afterwards, and a difference fails the task.
+  - O(uid), O(gid), O(mode) and O(pool_layout) can only be set when the group is created. They are
+    compared afterwards, and a difference fails the task instead of recreating the group.
+  - Removing a group needs O(confirm_delete=true).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -36,7 +38,7 @@ attributes:
 options:
   name:
     description:
-      - Name of the subvolume group.
+      - Name of the subvolume group, for example V(csi).
     type: str
     required: true
   volume:
@@ -54,41 +56,70 @@ options:
   size:
     description:
       - Quota of the group, as bytes or with a binary unit such as V(500G) or V(10T).
-      - V(unlimited) (or V(0)) removes the quota.
-      - The task fails instead of shrinking the quota below what the group already uses.
+      - V(unlimited) (or V(0)) removes the quota. When not set, the current quota is kept, and a new
+        group is created without one.
+      - The task fails, before anything is changed, instead of shrinking the quota below what the group
+        already uses.
     type: str
   uid:
     description:
-      - Owner uid of the group directory. Only set on creation.
+      - Owner uid of the group directory. Only set when the group is created; a different value on an
+        existing group fails the task.
     type: int
   gid:
     description:
-      - Owner gid of the group directory. Only set on creation.
+      - Owner gid of the group directory. Only set when the group is created; a different value on an
+        existing group fails the task.
     type: int
   mode:
     description:
-      - Permissions of the group directory in octal, for example V('755'). Only set on creation.
+      - Permissions of the group directory in octal, for example V('755') or V('0750'). Quote the value
+        so YAML keeps it a string.
+      - Only set when the group is created; a different value on an existing group fails the task.
     type: str
   pool_layout:
     description:
-      - Data pool the group's data is stored in. Only set on creation.
+      - Data pool the group's data is stored in. When not set, the volume's default data pool is used.
+      - Only set when the group is created; a different value on an existing group fails the task.
     type: str
   confirm_delete:
     description:
-      - Must be V(true) for O(state=absent) to remove an existing group.
+      - Must be V(true) for O(state=absent) to remove an existing group. Without it the task fails, in
+        check mode too.
     type: bool
     default: false
+notes:
+  - It is assumed that ceph cannot change the owner, mode or data pool of an existing group, so these
+    are treated as create-only. This has not been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.cephfs_subvolume
+    description: Manage subvolumes inside a group.
+  - module: croit.ceph.cephfs_volume
+    description: Manage the CephFS volume the group lives in.
+  - module: croit.ceph.cephfs_quota
+    description: Set quotas and layouts on arbitrary CephFS directories.
+  - name: croit API reference
+    description: The croit REST API, including the C(/cephfs/subvolume-groups) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: CephFS subvolumes
+    description: Upstream documentation of CephFS subvolume groups and subvolumes.
+    link: https://docs.ceph.com/en/latest/cephfs/fs-volumes/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Subvolume group for Kubernetes volumes, capped at 50 TiB
   croit.ceph.cephfs_subvolume_group:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     volume: cephfs
     name: csi
     size: 50T
     mode: "755"
+  register: csi
+
+- name: Show how much of the quota is used
+  ansible.builtin.debug:
+    msg: "{{ csi.subvolume_group.bytesUsed }} of {{ csi.subvolume_group.quotaMaxBytes }} bytes used"
 
 - name: Remove the quota
   croit.ceph.cephfs_subvolume_group:
@@ -111,13 +142,47 @@ subvolume_group:
     - Before the change in check mode; empty when the group does not exist.
   returned: always
   type: dict
-  sample:
-    dataPool: cephfs.cephfs.data
-    bytesUsed: 1073741824
-    quotaMaxBytes: 54975581388800
-    uid: 0
-    gid: 0
-    mode: 16877
+  contains:
+    dataPool:
+      description: Data pool the group's data is stored in.
+      returned: when the group exists
+      type: str
+      sample: cephfs.cephfs.data
+    bytesUsed:
+      description: Bytes the group uses.
+      returned: when the group exists
+      type: int
+      sample: 1073741824
+    quotaMaxBytes:
+      description: Quota in bytes, or null when there is none.
+      returned: when the group exists
+      type: int
+      sample: 54975581388800
+    quotaUsedPercent:
+      description: Percentage of the quota used, or null when there is none.
+      returned: when the group exists
+      type: float
+      sample: 0.002
+    uid:
+      description: Owner uid of the group directory.
+      returned: when the group exists
+      type: int
+      sample: 0
+    gid:
+      description: Owner gid of the group directory.
+      returned: when the group exists
+      type: int
+      sample: 0
+    mode:
+      description: Mode of the group directory as a decimal integer, including the file type bits (V(16877) is C(drwxr-xr-x)).
+      returned: when the group exists
+      type: int
+      sample: 16877
+    createdAt:
+      description: When the group was created, as C(YYYY-MM-DD HH:MM:SS).
+      returned: when the group exists
+      type: str
+      sample: "2026-10-06 12:00:00"
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

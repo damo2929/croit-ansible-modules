@@ -19,13 +19,15 @@ module: api_token
 short_description: Manage croit API tokens
 version_added: 0.1.0
 description:
-  - Create, update and delete croit API tokens, identified by name.
-  - B(The secret is shown exactly once.) croit stores only a hash of it, so the module returns it in
-    RV(token) only on the run that creates the token. It cannot be read back later; a lost token has to be
-    deleted and created again. Set C(no_log) on the task and store RV(token) somewhere safe straight away.
-  - Only the roles of an existing token can be changed. O(expiry) is used when the token is created.
-  - The token the module itself authenticates with is never deleted or stripped of the admin role,
-    so a playbook cannot lock itself out.
+  - Creates, updates and deletes croit API tokens. A token is identified by O(name), which must be unique among
+    the cluster's API tokens.
+  - B(The secret is shown exactly once.) croit stores only a hash of it, so the module returns it in RV(token)
+    only on the run that creates the token. It cannot be read back later; a lost token has to be deleted and
+    created again. Set C(no_log) on the task and store RV(token) somewhere safe straight away.
+  - Only the roles of an existing token can be changed, and only when they differ from the requested set.
+    O(expiry) is used when the token is created. Options left unset are left alone.
+  - The token the module itself authenticates with is never deleted or stripped of the admin role, so a
+    playbook cannot lock itself out.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -34,53 +36,85 @@ extends_documentation_fragment:
 attributes:
   check_mode:
     support: full
+    details:
+      - In check mode no token is created, so RV(token) is never returned.
   diff_mode:
     support: full
+    details:
+      - The diff shows the name, roles and expiry; never the secret.
 options:
   name:
     description:
-      - Name of the token. Must be unique among the cluster's API tokens for this module to manage it.
+      - Name of the token, which identifies it.
+      - When several tokens share the name, the module fails and asks you to remove the duplicates in croit.
     type: str
     required: true
   state:
     description:
-      - Whether the token should exist.
+      - V(present) creates the token or updates its roles.
+      - V(absent) deletes the token, which revokes it immediately. A token that does not exist is left alone.
     type: str
     choices: [present, absent]
     default: present
   roles:
     description:
-      - The complete set of roles of the token. Order does not matter.
+      - The complete set of roles of the token. Order and duplicates do not matter.
       - Required when the token is created. When not set, an existing token's roles are left alone.
-      - V(admin) needs V(viewer) as well, as croit requires.
+      - Must not be empty, and V(admin) needs V(viewer) as well, as croit requires. Both are checked before
+        anything is written, in check mode too.
     type: list
     elements: str
     choices: [admin, viewer, securefolder]
   expiry:
     description:
       - When the token stops being accepted, as an ISO 8601 date-time such as V(2027-01-01T00:00:00Z).
-      - Only used when the token is created; croit cannot change the expiry of an existing token.
-        When both are ISO date-times and differ from the existing token's, the module fails rather
-        than recreating the token.
-      - Not set creates a token that never expires.
+      - Only used when the token is created; croit cannot change the expiry of an existing token. When it is an
+        ISO date-time that differs from the existing token's expiry, the module fails rather than recreating
+        the token.
+      - When not set, a new token never expires.
     type: str
+notes:
+  - The returned RV(token) is not masked by Ansible, so that you can use it. Always set C(no_log) on the task
+    that creates a token, and on any task that uses the registered result.
+  - The lockout guard compares the token with the identity croit reports for the API token in use
+    (C(/auth/token-info)).
+seealso:
+  - module: croit.ceph.user
+    description: Manage local croit users that log in with a password.
+  - name: croit API reference
+    description: The C(/api-tokens) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: Token for the monitoring system
   croit.ceph.api_token:
     name: prometheus
     roles: [viewer]
-  register: token
+  register: prometheus_token
   no_log: true
 
-- name: Store it the moment it is created
+- name: Store the secret the moment it is created
   ansible.builtin.copy:
-    content: "{{ token.token }}"
+    content: "{{ prometheus_token.token }}"
     dest: /etc/prometheus/croit-token
     mode: "0600"
-  when: token.token is defined
+  when: prometheus_token.token is defined
   no_log: true
+
+- name: Time-limited admin token for a CI pipeline
+  croit.ceph.api_token:
+    name: ci-2026
+    roles: [admin, viewer]
+    expiry: "2027-01-01T00:00:00Z"
+  register: ci_token
+  no_log: true
+
+- name: Downgrade an existing token to read-only
+  croit.ceph.api_token:
+    name: ci-2026
+    roles: [viewer]
 
 - name: Revoke a token
   croit.ceph.api_token:
@@ -91,22 +125,41 @@ EXAMPLES = r"""
 RETURN = r"""
 api_token:
   description:
-    - The token's name, roles and expiry as croit reports them after the change (C(ApiTokenInfo) in the croit API).
-      Never contains the secret.
-    - Before the change in check mode; empty when the token does not exist.
+    - The token's name, roles and expiry as croit reports them after the change (C(ApiTokenInfo) in the croit
+      API). It never contains the secret.
+    - In check mode, the token before the change. Empty when the token does not exist.
   returned: always
   type: dict
-  sample:
-    id: 12
-    name: prometheus
-    roles: [viewer]
-    expiresBy: null
+  contains:
+    id:
+      description: croit's id of the token.
+      returned: when the token exists
+      type: int
+      sample: 12
+    name:
+      description: Name of the token.
+      returned: when the token exists
+      type: str
+      sample: prometheus
+    roles:
+      description: Roles the token holds.
+      returned: when the token exists
+      type: list
+      elements: str
+      sample: [viewer]
+    expiresBy:
+      description: When the token expires, or null when it never does.
+      returned: when the token exists
+      type: str
+      sample: "2027-01-01T00:00:00Z"
 token:
   description:
-    - The secret token. Only returned by the run that created the token, never in check mode.
+    - The secret token. Only returned by the run that created the token, never in check mode, and never
+      masked; set C(no_log) on the task.
     - It cannot be retrieved again.
   returned: when the token was created
   type: str
+  sample: "********"
 """
 
 import datetime

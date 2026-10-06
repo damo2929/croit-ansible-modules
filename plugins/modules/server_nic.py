@@ -35,6 +35,21 @@ attributes:
     support: full
   diff_mode:
     support: full
+notes:
+  - Changing or removing the address croit reaches the server on, or deleting the interface that carries
+    it, is refused unless O(allow_management_ip_change=true), also in check mode.
+  - Deleting an interface record makes croit stop configuring it, which removes its addresses and VLANs
+    from the node at its next configuration run.
+seealso:
+  - module: croit.ceph.server_bond
+    description: Create and change bonds of interfaces.
+  - module: croit.ceph.server_vlan
+    description: Create and change VLAN interfaces.
+  - module: croit.ceph.server_info
+    description: Read servers with their interfaces (O(croit.ceph.server_info#module:include_nics=true)).
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -85,27 +100,93 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Address the cluster network interface
   croit.ceph.server_nic:
     server: storage-07
     nic: ens2f1
     ip: 192.168.50.17/24
     notes: cluster network, switch B port 12
+  register: cluster_nic
+
+- name: Show the interface's croit name and address
+  ansible.builtin.debug:
+    msg: "{{ cluster_nic.nic.name }} has {{ cluster_nic.nic.ip }}"
 
 - name: Remove a stale IPv6 address
   croit.ceph.server_nic:
     server: storage-07
     nic: "3c:fd:fe:aa:bb:cc"
     ip6: ""
+
+- name: Forget the record of a removed card (removes its addresses from the node)
+  croit.ceph.server_nic:
+    server: storage-07
+    nic: ens3f0
+    state: absent
+    confirm_delete: true
 """
 
 RETURN = r"""
 nic:
   description:
     - The interface as croit reports it after the change (C(NicResponse) in the croit API).
-    - Before the change in check mode; empty after O(state=absent).
+    - Before the change in check mode; empty after O(state=absent) or when the interface does not exist.
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's numeric interface id.
+      returned: when the interface exists
+      type: int
+      sample: 31
+    name:
+      description: croit's name for the interface.
+      returned: when the interface exists
+      type: str
+      sample: eth1
+    linuxName:
+      description: The interface name the node's OS uses.
+      returned: when the interface exists
+      type: str
+      sample: ens2f1
+    mac:
+      description: MAC address.
+      returned: when the interface exists
+      type: str
+      sample: "3c:fd:fe:aa:bb:cc"
+    ip:
+      description: IPv4 address with prefix length, or null.
+      returned: when the interface exists
+      type: str
+      sample: 192.168.50.17/24
+    ip6:
+      description: IPv6 address with prefix length, or null.
+      returned: when the interface exists
+      type: str
+      sample: null
+    notes:
+      description: Free text croit keeps about the interface.
+      returned: when the interface exists
+      type: str
+      sample: cluster network, switch B port 12
+    type:
+      description: V(normal), V(bond), V(infiniband) or V(unknown).
+      returned: when the interface exists
+      type: str
+      sample: normal
+    isManaged:
+      description: Whether croit configures this interface.
+      returned: when the interface exists
+      type: bool
+      sample: true
+    vlans:
+      description: VLAN interfaces on top of this interface (C(VlanInfo) in the croit API).
+      returned: when the interface exists
+      type: list
+      elements: dict
+      sample: [{id: 512, vlan: 110, ip: 10.110.0.17/24}]
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -21,13 +21,15 @@ module: rgw_service
 short_description: Manage the S3 object gateways (RGW) of a croit cluster
 version_added: 0.1.0
 description:
-  - Makes sure the servers in O(servers) run an object gateway, or do not, and manages each gateway's own
-    listening ports, DNS name and zone.
-  - New gateways join the realm, zonegroup and zone the cluster was bootstrapped with. A cluster without S3
-    is bootstrapped with M(croit.ceph.rgw_bootstrap), not with this module. This module also adds the
-    gateways of a cluster that joined a multisite setup as a secondary (M(croit.ceph.s3_multisite)).
-  - Changing a gateway's ports, DNS name or zone restarts that gateway.
-  - Starting, stopping and restarting gateways is done with M(croit.ceph.service) (O(croit.ceph.service#module:type=radosgw)).
+  - Makes sure the servers in O(servers) run an object gateway, or do not, and manages each of those gateways' own
+    listening ports, DNS name and zone. Gateways are identified by the server they run on.
+  - New gateways join the realm, zonegroup and zone the cluster was bootstrapped with. A cluster without S3 is
+    bootstrapped with M(croit.ceph.rgw_bootstrap), not with this module. This module also adds the gateways of a
+    cluster that joined a multisite setup as a secondary (M(croit.ceph.s3_multisite)).
+  - O(port), O(ssl_port), O(dns_name) and O(zone) are only managed when set. Changing any of them restarts the
+    affected gateway.
+  - Starting, stopping and restarting gateways is done with M(croit.ceph.service) and
+    O(croit.ceph.service#module:type=radosgw).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -40,89 +42,221 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows the servers that run a gateway and, when O(port), O(ssl_port), O(dns_name) or O(zone) is set,
+        the managed configuration of each gateway in O(servers).
 options:
   servers:
     description:
-      - Servers by hostname or numeric id.
+      - Servers to act on, by hostname or numeric id.
     type: list
     elements: str
     required: true
   state:
     description:
       - V(present) adds a gateway to every server in O(servers) that has none.
-      - V(absent) removes the gateways of the servers in O(servers). No data is lost, but clients of those
-        gateways lose access. croit asks before removing the gateways of every node at once, which needs
+      - V(absent) removes the gateways of the servers in O(servers). No data is lost, but clients of those gateways
+        lose access. croit asks before removing the gateways of every node at once, which needs
         O(ignore_warnings=true).
+      - For a gateway service that spans several servers, only the part on the named server is removed.
     type: str
     choices: [present, absent]
     default: present
   exclusive:
     description:
-      - With O(state=present), also remove the gateways of servers not in O(servers).
+      - With O(state=present), also remove the gateways of all servers that are not in O(servers).
+      - Ignored with O(state=absent).
     type: bool
     default: false
   ha_groups:
     description:
-      - HA groups (by name or numeric id) whose HA Proxy backend set new gateways are added to.
-      - Only used when a gateway is created. croit adds them best-effort.
+      - HA groups, by name or numeric id, whose HA Proxy backend set new gateways are added to (see M(croit.ceph.ha_group)).
+      - Only used when a gateway is created; croit adds them on a best-effort basis.
     type: list
     elements: str
   port:
     description:
-      - Plain HTTP port of each gateway in O(servers). Only managed when set.
+      - Plain HTTP port of each gateway in O(servers).
+      - When unset, the port is left alone. A gateway that relies on croit's default reports no port, so setting the
+        default port explicitly counts as a change once.
     type: int
   ssl_port:
     description:
-      - TLS port of each gateway in O(servers). Only managed when set.
+      - TLS port of each gateway in O(servers).
+      - When unset, the port is left alone.
     type: int
   dns_name:
     description:
-      - DNS name each gateway in O(servers) answers S3 requests for. Only managed when set.
+      - DNS name each gateway in O(servers) answers virtual-host style S3 requests for.
+      - When unset, the DNS name is left alone.
     type: str
   zone:
     description:
-      - RGW zone each gateway in O(servers) serves. Only managed when set.
+      - RGW zone each gateway in O(servers) serves.
+      - When unset, the zone is left alone.
     type: str
+notes:
+  - Removing every gateway of the cluster leaves S3 unreachable until a gateway is added again.
+seealso:
+  - module: croit.ceph.rgw_bootstrap
+    description: Give a cluster its S3 surface and first gateways.
+  - module: croit.ceph.service
+    description: Start, stop and restart gateways, or read their state with M(croit.ceph.service_info).
+  - module: croit.ceph.ha_group
+    description: Manage the HA groups and floating IPs that front the gateways.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/services) and C(/services) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph Object Gateway configuration
+    description: Upstream documentation of RGW frontends, ports and DNS names.
+    link: https://docs.ceph.com/en/latest/radosgw/config-ref/
 """
 
 EXAMPLES = r"""
-- name: Gateways on three nodes, listening on 8080
-  croit.ceph.rgw_service:
-    servers: [node1, node2, node3]
-    port: 8080
-    ha_groups: [s3-vip]
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 
-- name: Exactly these gateways, remove any others
+- name: Run gateways on three nodes, listening on port 8080 behind an HA group
   croit.ceph.rgw_service:
-    servers: [node1, node2]
+    servers:
+      - node1
+      - node2
+      - node3
+    port: 8080
+    ha_groups:
+      - s3-vip
+
+- name: Answer virtual-host style requests for s3.example.com
+  croit.ceph.rgw_service:
+    servers:
+      - node1
+      - node2
+      - node3
+    dns_name: s3.example.com
+  register: rgw
+
+- name: Show each gateway's configuration
+  ansible.builtin.debug:
+    var: rgw.config
+
+- name: Run exactly these gateways and remove any others
+  croit.ceph.rgw_service:
+    servers:
+      - node1
+      - node2
     exclusive: true
     ignore_warnings: true
 
 - name: Remove the gateway of a node
   croit.ceph.rgw_service:
-    servers: [node3]
+    servers:
+      - node3
     state: absent
 """
 
 RETURN = r"""
 gateways:
-  description: The object gateway services (C(MultiServerServiceResponse) rows of type C(radosgw)) after the run.
+  description:
+    - The object gateway services (C(MultiServerServiceResponse) rows of type V(radosgw)) after the run.
+    - In check mode, the gateways as they were before.
   returned: always
   type: list
   elements: dict
+  contains:
+    id:
+      description: The service's id.
+      returned: always
+      type: int
+      sample: 31
+    name:
+      description: The full systemd service name.
+      returned: always
+      type: str
+      sample: ceph-radosgw@rgw.node1
+    type:
+      description: The service type, always V(radosgw) here.
+      returned: always
+      type: str
+      sample: radosgw
+    server:
+      description: The id of the server the gateway runs on.
+      returned: always
+      type: int
+      sample: 3
+    serverHostname:
+      description: The hostname of the server the gateway runs on.
+      returned: always
+      type: str
+      sample: node1
+    multiServer:
+      description: Every server id the service runs on, for a gateway service that spans several servers.
+      returned: always
+      type: list
+      elements: int
+      sample: []
+    running:
+      description: Whether the gateway is running.
+      returned: always
+      type: bool
+      sample: true
+    state:
+      description: croit's state of the service.
+      returned: always
+      type: str
+      sample: ENABLED
 config:
-  description: Each gateway's own configuration after the run, keyed by server hostname (C(RgwServiceConfigResponse)).
+  description:
+    - Each gateway's own configuration after the run, keyed by server hostname (C(RgwServiceConfigResponse) in the
+      croit API). A null value means the gateway relies on the cluster-wide default.
   returned: when O(port), O(ssl_port), O(dns_name) or O(zone) is set
   type: dict
+  sample:
+    node1:
+      port: 8080
+      sslPort: null
+      dnsName: s3.example.com
+      zone: dc1
 tasks:
-  description: The croit tasks the change ran as.
-  returned: when a change ran
+  description: Every croit background task the change ran as, in order.
+  returned: when the change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Add RGW services
+      state: FINISHED
+      done: true
 task:
-  description: The last croit task the change ran as.
-  returned: when a change ran as a task
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Add RGW services
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

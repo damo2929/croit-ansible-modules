@@ -24,7 +24,8 @@ module: cephfs_guard
 short_description: Manage cephfs-guard ransomware protection of a CephFS volume on a croit cluster
 version_added: 0.1.0
 description:
-  - Enable, configure and disable cephfs-guard for a CephFS volume, identified by O(volume).
+  - Enable, configure and disable cephfs-guard, croit's ransomware protection, for a CephFS volume
+    identified by O(volume).
   - Manages the detection settings, the detectors, the actions taken on detection, and which servers run a
     cephfs-guard instance (and its ports).
   - Only options that are set are managed; anything left out keeps its current value.
@@ -45,7 +46,7 @@ attributes:
 options:
   volume:
     description:
-      - The CephFS volume to guard.
+      - Name of the CephFS volume to guard, for example V(cephfs).
     type: str
     required: true
   state:
@@ -91,14 +92,16 @@ options:
     type: dict
     suboptions:
       action_threshold:
-        description: Score that triggers the actions. croit uses 0.6 when cephfs-guard is enabled without it.
+        description: Aggregated detection score, between 0 and 1, that triggers the actions. croit uses 0.6 when cephfs-guard is enabled without it.
         type: float
       min_detectors:
-        description: Minimum number of detectors that must contribute. croit uses 1 when unset.
+        description: Minimum number of detectors that must contribute to a detection. croit uses 1 when cephfs-guard is enabled without it.
         type: int
   detectors:
     description:
       - Detector settings, keyed by detector. Only the detectors and sub-options that are set are managed.
+      - When cephfs-guard is enabled, every detector that is set needs both C(enabled) and C(weight);
+        a detector with only one of them fails the task.
     type: dict
     suboptions:
       extension_change:
@@ -168,17 +171,34 @@ options:
     type: dict
     suboptions:
       snapshot:
-        description: Create CephFS snapshots.
+        description: Take a CephFS snapshot of the volume when a detection crosses the threshold.
         type: bool
       yara_scan:
-        description: Scan flagged files against YARA rules.
+        description: Scan the files flagged by a detection against croit's YARA rules.
         type: bool
       block:
-        description: Evict (blocklist) the clients flagged as malicious.
+        description: Evict and blocklist the CephFS clients a detection flags as malicious, cutting off their access.
         type: bool
+notes:
+  - O(state=absent) needs no confirmation because the volume and its data are untouched, but the volume
+    is no longer protected afterwards.
+  - It is assumed that a detector left out of an update keeps its settings. To be safe, the module sends
+    every detector whose current settings it knows. This has not been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.cephfs_guard_webhook
+    description: Manage the alerting webhooks of a guarded volume.
+  - module: croit.ceph.cephfs_guard_info
+    description: Read cephfs-guard configurations, instances and incidents.
+  - module: croit.ceph.cephfs_volume
+    description: Manage the CephFS volume being guarded.
+  - name: croit API reference
+    description: The croit REST API, including the C(/services/cephfsguard) endpoints.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Guard the cephfs volume on two nodes, snapshot and block on detection
   croit.ceph.cephfs_guard:
     volume: cephfs
@@ -192,8 +212,13 @@ EXAMPLES = r"""
     actions:
       snapshot: true
       block: true
+  register: guard
 
-- name: Turn off client blocking
+- name: Show where the instances listen
+  ansible.builtin.debug:
+    msg: "{{ guard.services | map(attribute='ip') | list }}"
+
+- name: Turn off client blocking, keeping everything else
   croit.ceph.cephfs_guard:
     volume: cephfs
     actions:
@@ -208,19 +233,118 @@ EXAMPLES = r"""
 RETURN = r"""
 config:
   description:
-    - The volume's cephfs-guard configuration as croit reports it after the change (C(CephfsGuardConfigResponse)).
-      Before the change in check mode; empty when cephfs-guard is not enabled for the volume.
+    - The volume's cephfs-guard configuration as croit reports it after the change
+      (C(CephfsGuardConfigResponse) in the croit API).
+    - Before the change in check mode; empty when cephfs-guard is not enabled for the volume.
   returned: always
   type: dict
+  contains:
+    id:
+      description: Id of the volume's cephfs-guard configuration.
+      returned: when the volume is guarded
+      type: int
+      sample: 1
+    volume:
+      description: The guarded CephFS volume.
+      returned: when the volume is guarded
+      type: str
+      sample: cephfs
+    detection:
+      description: Detection aggregation settings (C(actionThreshold), C(minDetectors)).
+      returned: when the volume is guarded
+      type: dict
+      sample: {actionThreshold: 0.7, minDetectors: 1}
+    detectors:
+      description: Per-detector settings, each with C(enabled) and C(weight).
+      returned: when the volume is guarded
+      type: dict
+      sample: {fileEntropy: {enabled: true, weight: 2.0}}
+    actions:
+      description: Which actions run on a detection, each with C(enabled).
+      returned: when the volume is guarded
+      type: dict
+      sample: {snapshot: {enabled: true}, yaraScan: {enabled: false}, block: {enabled: true}}
+    health:
+      description: Aggregated health of the volume's instances (C(enabled), C(healthy), C(status), C(hasActiveDetections)).
+      returned: when the volume is guarded
+      type: dict
+      sample: {enabled: true, healthy: true, status: ok, hasActiveDetections: false}
 services:
-  description: The cephfs-guard instances of the volume (C(CephfsGuardServiceResponse)) after the change.
+  description: The volume's cephfs-guard instances after the change (C(CephfsGuardServiceResponse) in the croit API).
   returned: when the volume is guarded
   type: list
   elements: dict
+  contains:
+    id:
+      description: Id of the instance.
+      returned: always
+      type: int
+      sample: 3
+    serverHostname:
+      description: Server the instance runs on.
+      returned: always
+      type: str
+      sample: node1
+    nicName:
+      description: Kernel name of the interface the instance listens on.
+      returned: always
+      type: str
+      sample: eth1
+    vlan:
+      description: VLAN tag, or null for the untagged interface.
+      returned: always
+      type: int
+      sample: null
+    ip:
+      description: Address the instance listens on.
+      returned: always
+      type: str
+      sample: 10.0.1.11
+    useIpv6:
+      description: Whether the instance uses IPv6.
+      returned: always
+      type: bool
+      sample: false
+    mdsPort:
+      description: MDS receiver port.
+      returned: always
+      type: int
+      sample: 7600
+    httpPort:
+      description: HTTP port.
+      returned: always
+      type: int
+      sample: 7601
 task:
   description: The last croit background task the change ran as.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: The task's id; use it with M(croit.ceph.task) or M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Enable cephfs-guard
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript. Empty while the task is listed without it.
+      returned: always
+      type: str
+      sample: Creating pools...
 """
 
 import copy

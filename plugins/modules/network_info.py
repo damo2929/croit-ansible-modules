@@ -15,7 +15,11 @@ module: network_info
 short_description: Read the networks croit knows on a croit cluster
 version_added: 0.1.0
 description:
-  - Lists the subnets croit manages, optionally filtered by CIDR or type.
+  - Lists the subnets croit manages, which it uses for node addresses, DHCP and PXE boot, and for the Ceph public
+    and cluster networks.
+  - The result can be filtered by O(cidr) or O(type). Each network gets an added C(cidr) member with its
+    canonical network, so results can be matched against M(croit.ceph.network) tasks.
+  - The module never changes anything.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -29,45 +33,101 @@ attributes:
 options:
   cidr:
     description:
-      - Only return the network with this CIDR, for example V(10.10.0.0/24).
+      - Only return the network with this CIDR, for example V(10.10.0.0/24). A host address with a prefix such
+        as V(10.10.0.5/24) names the same network.
+      - When not set, networks of every CIDR are returned.
     type: str
   type:
     description:
-      - Only return networks of this type.
+      - Only return networks of this type. When not set, networks of every type are returned.
     type: str
     choices: [other, ceph_public, ceph_internal, croit, ipmi]
+seealso:
+  - module: croit.ceph.network
+    description: Create, update and delete networks.
+  - name: croit API reference
+    description: The C(/networks) endpoint this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
 - name: All networks
   croit.ceph.network_info:
   register: nets
+
+- name: Show every network in CIDR notation
+  ansible.builtin.debug:
+    msg: "{{ nets.networks | map(attribute='cidr') | list }}"
 
 - name: The Ceph public network(s)
   croit.ceph.network_info:
     type: ceph_public
   register: public
+
+- name: Use the public network in another task
+  ansible.builtin.debug:
+    msg: "Ceph public network is {{ public.networks[0].cidr }}"
+  when: public.networks | length > 0
 """
 
 RETURN = r"""
 networks:
-  description:
-    - The matching networks (C(NetworkInfo) in the croit API), each with an added C(cidr) member holding
-      the canonical network, for example C(10.10.0.0/24).
+  description: The matching networks (C(NetworkInfo) in the croit API), each with an added C(cidr) member.
   returned: always
   type: list
   elements: dict
-  sample:
-    - id: 4
-      cidr: 10.10.0.0/24
-      ip: 10.10.0.0
-      netmask: 24
-      type: ceph_public
-      description: ""
-      gateway: null
-      mtu: null
-      poolStart: null
-      poolEnd: null
+  contains:
+    cidr:
+      description: The canonical network in CIDR notation, added by this module; null if croit's row is unusable.
+      returned: always
+      type: str
+      sample: 10.10.0.0/24
+    id:
+      description: croit's id of the network.
+      returned: always
+      type: int
+      sample: 4
+    ip:
+      description: An address in the network, not necessarily the network address; together with C(netmask) it gives the CIDR.
+      returned: always
+      type: str
+      sample: 10.10.0.0
+    netmask:
+      description: The CIDR prefix length.
+      returned: always
+      type: int
+      sample: 24
+    type:
+      description: What croit uses the network for.
+      returned: always
+      type: str
+      sample: ceph_public
+    description:
+      description: Free-text notes.
+      returned: always
+      type: str
+      sample: public network, bond0
+    gateway:
+      description: Default route installed on servers in this network, or null.
+      returned: always
+      type: str
+      sample: 10.10.0.1
+    mtu:
+      description: Custom MTU, or null for the default of 1500.
+      returned: always
+      type: int
+      sample: 9000
+    poolStart:
+      description: First address of the DHCP pool, or null.
+      returned: always
+      type: str
+      sample: 192.168.100.100
+    poolEnd:
+      description: Last address of the DHCP pool, or null.
+      returned: always
+      type: str
+      sample: 192.168.100.200
 """
 
 import ipaddress

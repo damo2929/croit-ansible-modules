@@ -23,11 +23,14 @@ module: s3_bucket
 short_description: Manage S3 buckets on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete S3 buckets of the Ceph object gateway through the croit API, including the
+  - Create, update and delete S3 buckets of the Ceph object gateway (RGW) through the croit API, including the
     owner, versioning, access control list, quota and bucket policy.
-  - Only options that are set are managed; anything left out keeps its current value.
-  - Settings that can only be chosen at creation (placement, object lock, pre-sharding) are used when the
-    bucket is created and ignored afterwards.
+  - The bucket is identified by O(name). Only options that are set are managed; anything left out keeps its
+    current value.
+  - Settings that can only be chosen at creation (O(placement), O(object_lock), O(expected_number_of_objects)) are
+    used when the bucket is created and ignored afterwards.
+  - Deleting a bucket needs O(confirm_delete=true), and a bucket that still holds objects also needs
+    O(purge_objects=true), which deletes all of its objects.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -56,92 +59,123 @@ options:
     default: present
   owner:
     description:
-      - The S3 user that owns the bucket. Required when the bucket is created.
-      - Changing it gives the bucket to another user of the same tenant. Moving a bucket to another tenant
-        is not supported, because it changes the bucket's name.
+      - The S3 user that owns the bucket, tenant-qualified as C(tenant$uid) where the user has a tenant.
+      - Required when the bucket is created. Changing it gives the bucket to another user of the same tenant.
+      - The owner must be in the bucket's tenant; moving a bucket to another tenant is refused, because it
+        would change the bucket's name.
     type: str
   placement:
     description:
-      - Placement rule the bucket's data lands on. The zone's default when not set.
+      - Placement rule the bucket's data lands on, as managed with M(croit.ceph.s3_placement).
+      - When not set, the owner's default placement or the zone's default is used.
       - Only used when the bucket is created.
     type: str
   object_lock:
     description:
-      - Enable S3 object lock (retention and legal hold). It also enables versioning.
+      - Enable S3 object lock (retention and legal hold) on the bucket. Object lock also enables versioning, so it
+        cannot be combined with O(versioning=suspended).
       - Only used when the bucket is created.
     type: bool
   expected_number_of_objects:
     description:
-      - Pre-shard the bucket index for about this many objects. Leave unset if in doubt.
+      - Pre-shard the bucket index for about this many objects. Leave unset if in doubt; RGW reshards
+        dynamically.
       - Only used when the bucket is created.
     type: int
   versioning:
     description:
       - Whether the bucket keeps old versions of its objects.
-      - S3 cannot turn versioning off once it was enabled, only suspend it. V(suspended) is also satisfied
-        by a bucket that never had versioning.
+      - S3 cannot turn versioning off once it was enabled, only suspend it. V(suspended) is therefore also
+        satisfied by a bucket that never had versioning.
     type: str
     choices: [enabled, suspended]
   acl:
     description:
-      - The complete access control list of the bucket. Grants that are not listed are removed, so include
-        the owner's own C(full_control) grant.
-      - An empty list is refused by croit.
+      - The complete access control list of the bucket. Grants that are not listed are removed, so include the
+        owner's own V(full_control) grant.
+      - Compared as a set; the order of the entries and display names do not matter.
+      - An empty list is refused, because croit cannot store an empty access control list.
     type: list
     elements: dict
     suboptions:
       grantee:
-        description: Who the grant is for.
+        description:
+          - Who the grant is for. V(single_user) needs O(acl[].user_id); V(all_users) means anonymous access,
+            V(authenticated_users) any S3 user of the cluster, and V(log_delivery) the log delivery group.
         type: str
         required: true
         choices: [single_user, all_users, authenticated_users, log_delivery]
       permission:
-        description: What the grantee may do.
+        description:
+          - What the grantee may do. V(read) and V(write) apply to the bucket's objects, V(read_acp) and V(write_acp)
+            to its access control list, and V(full_control) to all of these.
         type: str
         required: true
         choices: [read, write, read_acp, write_acp, full_control]
       user_id:
-        description: The S3 user, for O(acl[].grantee=single_user).
+        description:
+          - The S3 user the grant is for. Required for, and only valid with, O(acl[].grantee=single_user).
         type: str
   quota:
     description:
-      - Quota the bucket is held to. Only the sub-options that are set are managed.
+      - Quota the bucket is held to. Only the sub-options that are set are managed; the others keep their current
+        values.
+      - The default for all of a user's buckets is O(croit.ceph.s3_user#module:bucket_quota).
     type: dict
     suboptions:
       enabled:
-        description: Whether the quota is enforced.
+        description: Whether the quota is enforced. A quota with bounds but V(false) here is not enforced.
         type: bool
       max_size:
         description:
-          - Maximum size, as bytes or with a binary unit such as V(500G). V(-1) or V(unlimited) means no size bound.
+          - Maximum size, as bytes or with a binary unit such as V(500G) or V(5T).
+          - V(-1) or V(unlimited) means no size bound.
         type: str
       max_objects:
         description: Maximum number of objects. V(-1) means no object bound.
         type: int
   policy:
     description:
-      - The bucket policy, as a dict or a JSON string. It replaces the whole policy, and is compared as parsed
-        JSON, so formatting and key order do not matter.
-      - An empty dict or empty string removes the policy.
+      - The bucket policy, as a dict or a JSON string. It replaces the whole policy, and is compared as parsed JSON,
+        so formatting and key order do not matter.
+      - An empty dict or an empty string removes the policy.
     type: raw
   confirm_delete:
     description:
-      - Must be V(true) for O(state=absent) to delete an existing bucket.
+      - Must be V(true) for O(state=absent) to delete an existing bucket. Without it the module fails, in check mode
+        as well.
     type: bool
     default: false
   purge_objects:
     description:
-      - With O(state=absent), also delete every object in the bucket. Without it, croit refuses to delete a
+      - With O(state=absent), also delete every object in the bucket. Without it, the module refuses to delete a
         bucket that still holds objects.
     type: bool
     default: false
+notes:
+  - Deleting a bucket with O(purge_objects=true) irreversibly deletes all of its objects and their versions.
+  - The object count used for the O(purge_objects) check comes from croit's bucket list, which can lag behind
+    writes for a short time.
+seealso:
+  - module: croit.ceph.s3_bucket_info
+    description: Read buckets with their ACL, versioning, CORS rules and policy.
+  - module: croit.ceph.s3_user
+    description: Manage the S3 users that own buckets, and their default bucket quota.
+  - module: croit.ceph.s3_placement
+    description: Manage the placement rules a bucket can be created on.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/buckets) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RGW bucket policies
+    description: Upstream documentation of the S3 bucket policy language RGW supports.
+    link: https://docs.ceph.com/en/latest/radosgw/bucketpolicy/
 """
 
 EXAMPLES = r"""
-- name: Versioned bucket for backups with a quota
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create a versioned bucket for backups with a 5 TiB quota
   croit.ceph.s3_bucket:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     name: backups
     owner: backup
     versioning: enabled
@@ -149,7 +183,18 @@ EXAMPLES = r"""
       enabled: true
       max_size: 5T
 
-- name: Public read access through a bucket policy
+- name: Give a second user read access, keeping the owner's full control
+  croit.ceph.s3_bucket:
+    name: backups
+    acl:
+      - grantee: single_user
+        user_id: backup
+        permission: full_control
+      - grantee: single_user
+        user_id: auditor
+        permission: read
+
+- name: Allow anonymous reads through a bucket policy
   croit.ceph.s3_bucket:
     name: website
     owner: web
@@ -160,8 +205,13 @@ EXAMPLES = r"""
           Principal: "*"
           Action: ["s3:GetObject"]
           Resource: ["arn:aws:s3:::website/*"]
+  register: website
 
-- name: Delete a bucket and everything in it
+- name: Show the policy now stored on the bucket
+  ansible.builtin.debug:
+    var: website.bucket.policy
+
+- name: Delete a bucket and every object in it
   croit.ceph.s3_bucket:
     name: scratch
     state: absent
@@ -173,24 +223,102 @@ RETURN = r"""
 bucket:
   description:
     - The bucket as croit lists it after the change (C(RgwBucketResponse) in the croit API).
-    - When O(acl) or O(versioning) is set it also has C(acl) and C(versioning) (from C(BucketDetails)), and
-      when O(policy) is set, C(policy) as parsed JSON (or null).
-    - Before the change in check mode; empty when the bucket does not exist.
+    - In check mode, the bucket as it was before. Empty when the bucket does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    bucket: backups
-    owner: backup
-    placement_rule: default-placement
+  contains:
+    bucket:
+      description: The bucket's name, tenant-qualified as C(tenant:bucket) where it has a tenant.
+      returned: when the bucket exists
+      type: str
+      sample: backups
+    owner:
+      description: The S3 user that owns the bucket.
+      returned: when the bucket exists
+      type: str
+      sample: backup
+    placement_rule:
+      description: The placement rule the bucket's data lands on.
+      returned: when the bucket exists
+      type: str
+      sample: default-placement
+    tenant:
+      description: The bucket's tenant, empty for one that has none.
+      returned: when the bucket exists
+      type: str
+      sample: ""
     bucket_quota:
-      enabled: true
-      maxSize: 5497558138880
-      maxObjects: -1
-    versioning: ENABLED
+      description: The quota RGW holds the bucket to, with C(enabled), C(maxSize) and C(maxObjects).
+      returned: when the bucket exists
+      type: dict
+      sample:
+        enabled: true
+        maxSize: 5497558138880
+        maxObjects: -1
+    usageSum:
+      description: What the bucket holds across every zone, including C(numObjects) and C(sizeKiB).
+      returned: when the bucket exists
+      type: dict
+      sample:
+        numObjects: 1520
+        sizeKiB: 5242880
+    versioning:
+      description: The bucket's versioning state, V(ENABLED), V(SUSPENDED) or V(OFF).
+      returned: when the bucket exists and O(acl) or O(versioning) is set
+      type: str
+      sample: ENABLED
+    acl:
+      description: The bucket's access control list (C(AclEntry) in the croit API), each with C(grantee), C(permission) and C(userId).
+      returned: when the bucket exists and O(acl) or O(versioning) is set
+      type: list
+      elements: dict
+      sample:
+        - grantee: SINGLE_USER
+          permission: FullControl
+          userId: backup
+    policy:
+      description: The bucket policy as parsed JSON, or null when the bucket has none.
+      returned: when the bucket exists and O(policy) is set
+      type: dict
+      sample:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action: ["s3:GetObject"]
+            Resource: ["arn:aws:s3:::website/*"]
 task:
-  description: The last croit background task the change ran as, when there was one.
-  returned: when a task ran
+  description:
+    - The croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Create S3 bucket
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 import json

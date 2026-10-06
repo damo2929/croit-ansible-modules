@@ -43,6 +43,14 @@ attributes:
     support: full
   diff_mode:
     support: full
+seealso:
+  - module: croit.ceph.server
+    description: Reboot or shut down a node through croit, behind ceph's safety checks.
+  - module: croit.ceph.server_info
+    description: Read servers and their BMCs.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -104,22 +112,34 @@ options:
     type: bool
     default: true
 notes:
+  - O(power=off), O(action=power_cycle) and O(action=reboot_to_bios) cut a running server's power without
+    shutting the OS down, and bypass ceph's safety checks; prefer M(croit.ceph.server) with O(croit.ceph.server#module:action=reboot)
+    for planned maintenance. They are refused without O(confirm_action=true), also in check mode.
+  - The BMC password is never returned by croit and is not compared; it is only sent when registering or
+    initialising a device.
   - croit polls the BMCs every few seconds, so a power change can take a few seconds to show. With O(wait=true)
     the module waits until the BMC reports the new power state.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Make sure a node is powered on
   croit.ceph.ipmi:
     server: node7
     power: "on"
+  register: bmc
+
+- name: Show the BMC's address
+  ansible.builtin.debug:
+    msg: "BMC of node7 is at {{ bmc.ipmi.ip }}"
 
 - name: Blink the LED of a node to find it in the rack
   croit.ceph.ipmi:
     server: node7
     action: identify
 
-- name: Hard power cycle a hung node
+- name: Hard power cycle a hung node (cuts power without shutting down)
   croit.ceph.ipmi:
     server: node7
     action: power_cycle
@@ -130,6 +150,11 @@ EXAMPLES = r"""
     ip: 10.10.0.27
     username: ADMIN
     password: "{{ vault_bmc_password }}"
+
+- name: Forget a BMC record (the device itself is not touched)
+  croit.ceph.ipmi:
+    ip: 10.10.0.27
+    state: absent
 """
 
 RETURN = r"""
@@ -139,10 +164,62 @@ ipmi:
     - Before the change in check mode; empty when the device does not exist.
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's numeric IPMI device id.
+      returned: when the device exists
+      type: int
+      sample: 5
+    ip:
+      description: Address of the BMC.
+      returned: when the device exists
+      type: str
+      sample: 10.10.0.27
+    mac:
+      description: MAC address of the BMC.
+      returned: when the device exists
+      type: str
+      sample: "0c:c4:7a:11:22:33"
+    server:
+      description: The node this BMC belongs to (C(ServerInfo) in the croit API), or null when croit does not know.
+      returned: when the device exists
+      type: dict
+      sample: {id: 7, hostname: node7}
+    state:
+      description: What the BMC last reported (C(IpmiDeviceState) in the croit API), including C(power) (true when on); null when it did not answer.
+      returned: when the device exists
+      type: dict
+      sample: {power: true}
 task:
-  description: The croit background task O(action=initialize) ran as.
+  description: The croit background task O(action=initialize) ran as (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 import time

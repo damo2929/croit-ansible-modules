@@ -21,6 +21,8 @@ version_added: 0.1.0
 description:
   - Create and delete the managed local groups of a croit SMB cluster. The gateway nodes register a group
     with Samba within seconds, so it can be used as an NT principal in Windows ACLs.
+  - A group is identified by its O(cluster) and O(name). O(gid) is create-only; a different value for an existing group
+    fails the task, and a group has nothing else to update.
   - Group membership is managed on the user, with the O(croit.ceph.smb_user#module:groups) option of
     M(croit.ceph.smb_user).
   - Managed local groups exist only on generation-2 clusters without Active Directory; the module fails on
@@ -38,7 +40,8 @@ attributes:
 options:
   cluster:
     description:
-      - The SMB cluster, by name (croit's description) or numeric service id.
+      - The SMB cluster the group belongs to, by name (croit's description, see M(croit.ceph.smb_cluster)) or numeric
+        service id. The task fails when the cluster does not exist.
     type: str
     required: true
   name:
@@ -57,15 +60,40 @@ options:
   gid:
     description:
       - Unix gid of the group, to align it with an external system. croit derives one when not set.
-      - Fixed once the group exists.
+      - Create-only; a different value for an existing group fails the task.
     type: int
+notes:
+  - Deleting a group leaves dangling SIDs in the NT ACLs that name it; no data is deleted.
+seealso:
+  - module: croit.ceph.smb_user
+    description: Manage users and their group memberships.
+  - module: croit.ceph.smb_share
+    description: Grant a group access to a share.
+  - module: croit.ceph.smb_info
+    description: Read the users and groups of SMB clusters.
+  - name: croit API reference
+    description: The croit REST API this module uses (SMB gateways).
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
-- name: SMB group
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create an SMB group
   croit.ceph.smb_group:
     cluster: smb-office
     name: staff
+
+- name: Create a group with a fixed gid matching the file server it replaces
+  croit.ceph.smb_group:
+    cluster: smb-office
+    name: projects
+    gid: 2050
+  register: projects
+
+- name: Show the group's members
+  ansible.builtin.debug:
+    msg: "projects members: {{ projects.group.members | join(', ') }}"
 
 - name: Remove a group
   croit.ceph.smb_group:
@@ -79,15 +107,37 @@ group:
   description:
     - The group as croit reports it after the change (C(SmbGroupResponse) in the croit API), with an added
       C(members) list of user names.
-    - Before the change in check mode; empty when the group does not exist.
+    - In check mode the group before the change. Empty when the group does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    id: 2
-    groupname: staff
-    gid: 1002
-    memberIds: [4]
-    members: [alice]
+  contains:
+    id:
+      description: croit's id of the group.
+      returned: when the group exists
+      type: int
+      sample: 2
+    groupname:
+      description: The group name (O(name)).
+      returned: when the group exists
+      type: str
+      sample: staff
+    gid:
+      description: Unix gid backing the group on the gateway nodes.
+      returned: when the group exists
+      type: int
+      sample: 1002
+    memberIds:
+      description: croit ids of the member users.
+      returned: when the group exists
+      type: list
+      elements: int
+      sample: [4]
+    members:
+      description: User names of the members.
+      returned: when the group exists
+      type: list
+      elements: str
+      sample: [alice]
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

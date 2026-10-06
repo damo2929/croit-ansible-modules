@@ -40,15 +40,17 @@ attributes:
 options:
   pool:
     description:
-      - RBD pool of the disk. Required unless O(wwn) is set.
+      - RBD pool of the disk. Required together with O(image) unless O(wwn) is set, and mutually exclusive
+        with O(wwn).
     type: str
   image:
     description:
-      - RBD image name of the disk. Required unless O(wwn) is set.
+      - RBD image name of the disk. Required together with O(pool) unless O(wwn) is set, and mutually
+        exclusive with O(wwn).
     type: str
   wwn:
     description:
-      - WWN of the exported disk, instead of O(pool) and O(image).
+      - WWN of the exported disk, instead of O(pool) and O(image). It is compared case-insensitively.
     type: str
   state:
     description:
@@ -69,21 +71,53 @@ options:
     default: false
   confirm_delete:
     description:
-      - Must be V(true) together with O(delete_image=true).
+      - Must be V(true) together with O(delete_image=true). Only stopping the export does not need it.
     type: bool
     default: false
   service_id:
     description:
       - croit service id of the iSCSI gateway. Only needed if croit reports more than one.
     type: int
+seealso:
+  - module: croit.ceph.iscsi_client
+    description: Export a disk by mapping it to an initiator.
+  - module: croit.ceph.iscsi_group
+    description: Export a disk by mapping it to a host group.
+  - module: croit.ceph.iscsi_info
+    description: List the exported disks and who uses them.
+  - module: croit.ceph.rbd
+    description: Manage the RBD images behind the exported disks.
+  - name: Ceph iSCSI gateway
+    description: Upstream documentation of the Ceph iSCSI gateway.
+    link: https://docs.ceph.com/en/latest/rbd/iscsi-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - Stopping an export disconnects the disk from every initiator and host group that maps it.
+  - The size is compared with the RBD image size croit reports for the image.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Grow an exported disk
   croit.ceph.iscsi_disk:
     pool: iscsi
     image: datastore1
     size: 4T
+  register: grown
+
+- name: Check the new size
+  ansible.builtin.assert:
+    that: grown.disk.size >= 4398046511104
+
+- name: Preview stopping an export
+  croit.ceph.iscsi_disk:
+    pool: iscsi
+    image: old-datastore
+    state: absent
+  check_mode: true
 
 - name: Stop exporting a disk, keeping the image
   croit.ceph.iscsi_disk:
@@ -102,19 +136,64 @@ EXAMPLES = r"""
 RETURN = r"""
 disk:
   description:
-    - The exported disk (C(IscsiClientLun) in the croit API) and its C(size) in bytes after the change.
+    - The exported disk (C(IscsiClientLun) in the croit API) and its C(size) after the change.
     - Empty when the disk is not exported. Shows the state before the change in check mode.
   returned: always
   type: dict
-  sample:
-    pool: iscsi
-    image: datastore1
-    wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
-    size: 4398046511104
+  contains:
+    pool:
+      description: RBD pool of the disk.
+      returned: when the disk is exported
+      type: str
+      sample: iscsi
+    image:
+      description: RBD image name of the disk.
+      returned: when the disk is exported
+      type: str
+      sample: datastore1
+    wwn:
+      description: WWN of the disk on the target.
+      returned: when the disk is exported
+      type: str
+      sample: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
+    size:
+      description: Size of the RBD image in bytes, as croit reports it.
+      returned: when the disk is exported
+      type: int
+      sample: 4398046511104
 task:
-  description: The croit background task that unexported (and deleted) the disk.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when O(state=absent) stopped an export and croit ran it as a background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Delete iSCSI disk
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -18,10 +18,11 @@ module: oidc_provider
 short_description: Manage OpenID Connect login providers of croit
 version_added: 0.1.0
 description:
-  - Create, update and delete the OpenID Connect (single sign-on) providers croit offers on its login page,
-    identified by name.
-  - Only the options that are set are managed. croit replaces a provider's whole configuration on every
-    update, so the module sends the current values for everything that is not set.
+  - Creates, updates and deletes the OpenID Connect (single sign-on) providers croit offers on its login page.
+    A provider is identified by O(name), which must be unique among croit's providers.
+  - Only the options that are set are managed; the others keep their current value. croit replaces a
+    provider's whole configuration on every update, so the module sends the current values for everything
+    that is not set, and only when something differs.
   - B(Any change, and deleting the provider, logs out everyone who signed in through it.)
   - croit returns the stored client secret, so O(client_secret) is compared like any other option. It is
     never shown in a diff or returned.
@@ -37,23 +38,26 @@ attributes:
   diff_mode:
     support: full
     details:
-      - The client secret shows as C(********) in diffs.
+      - The client secret shows as C(********), or C(******** (changed)) when it will change.
 options:
   name:
     description:
-      - Human-readable name of the provider, shown on the login page. Must be unique among croit's providers.
+      - Human-readable name of the provider, shown on the login page. It identifies the provider.
+      - When several providers share the name, the module fails and asks you to rename or remove them.
     type: str
     required: true
   state:
     description:
-      - Whether the provider should exist.
+      - V(present) creates the provider or updates it.
+      - V(absent) deletes it, which logs out its users. A provider that does not exist is left alone.
     type: str
     choices: [present, absent]
     default: present
   discovery_url:
     description:
-      - Discovery URL of the provider (C(.../.well-known/openid-configuration)).
-      - Required when the provider is created. croit fetches it before storing the provider.
+      - Discovery URL of the provider, ending in C(/.well-known/openid-configuration).
+      - Required when the provider is created. croit fetches it before storing the provider, so it must be
+        reachable from the croit management node.
     type: str
   client_id:
     description:
@@ -61,7 +65,8 @@ options:
     type: str
   client_secret:
     description:
-      - Client secret croit uses with the provider. Set to an empty string to remove it.
+      - Client secret croit uses with the provider.
+      - Compared with the secret croit stores; set to an empty string to remove it.
     type: str
   client_auth:
     description:
@@ -71,67 +76,91 @@ options:
     choices: [none, basic, post]
   scope:
     description:
-      - Scopes requested from the provider, separated by spaces. croit uses C(openid profile) by default.
+      - Scopes requested from the provider, separated by spaces. croit uses C(openid profile) when none is set.
     type: str
   manual_roles:
     description:
-      - V(true) assigns roles to each user in croit by hand; V(false) derives them from O(group_pointer)
-        and O(role_mapping).
+      - V(true) assigns roles to each user in croit by hand.
+      - V(false) derives them from the groups found through O(group_pointer) and O(role_mapping).
     type: bool
   group_pointer:
     description:
-      - Claim name or JSON pointer to the list of groups in the provider's claims.
+      - Claim name or JSON pointer to the list of groups in the provider's claims, for example V(groups).
     type: str
   role_mapping:
     description:
-      - Map of group names in the claims to the croit role they grant (V(admin), V(viewer) or V(securefolder)).
-      - The complete mapping; groups that are not listed are removed.
+      - Map of group names in the claims to the croit role they grant, one of V(admin), V(viewer) or
+        V(securefolder).
+      - The complete mapping; groups that are not listed are removed. Invalid roles fail before anything is
+        written.
     type: dict
   default_roles:
     description:
-      - Roles every user from this provider gets. The complete set; order does not matter.
+      - Roles every user from this provider gets. The complete set; order and duplicates do not matter.
     type: list
     elements: str
     choices: [admin, viewer, securefolder]
   issuer_url:
     description:
-      - Override of the issuer URL. An empty string removes the override.
+      - Override of the issuer URL found through discovery. An empty string removes the override.
     type: str
   authorize_url:
     description:
-      - Override of the authorize endpoint. An empty string removes the override.
+      - Override of the authorize endpoint found through discovery. An empty string removes the override.
     type: str
   token_url:
     description:
-      - Override of the token endpoint. An empty string removes the override.
+      - Override of the token endpoint found through discovery. An empty string removes the override.
     type: str
   userinfo_url:
     description:
-      - Override of the userinfo endpoint. An empty string removes the override.
+      - Override of the userinfo endpoint found through discovery. An empty string removes the override.
     type: str
   jwks_url:
     description:
-      - Override of the JWKS endpoint. An empty string removes the override.
+      - Override of the JWKS endpoint found through discovery. An empty string removes the override.
     type: str
   callback_base_uri:
     description:
       - Override of the callback base URI croit gives the provider. An empty string removes the override.
     type: str
+notes:
+  - Every change to a provider, and deleting it, ends the sessions of users who signed in through it.
+seealso:
+  - module: croit.ceph.user
+    description: Manage local croit users that log in with a password.
+  - module: croit.ceph.api_token
+    description: Manage API tokens for automation.
+  - name: croit API reference
+    description: The C(/auth/oidc) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
-- name: Keycloak login
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+- name: Keycloak login with roles from groups
   croit.ceph.oidc_provider:
     name: Keycloak
     discovery_url: https://sso.example.com/realms/ops/.well-known/openid-configuration
     client_id: croit
     client_secret: "{{ vault_croit_oidc_secret }}"
     client_auth: basic
+    manual_roles: false
     group_pointer: groups
     role_mapping:
       storage-admins: admin
       storage-viewers: viewer
     default_roles: [viewer]
+  register: keycloak
+
+- name: Show croit's id of the provider
+  ansible.builtin.debug:
+    msg: "Keycloak provider id {{ keycloak.oidc_provider.id }}"
+
+- name: Request an extra scope (logs Keycloak users out)
+  croit.ceph.oidc_provider:
+    name: Keycloak
+    scope: openid profile email
 
 - name: Remove a provider (logs its users out)
   croit.ceph.oidc_provider:
@@ -142,15 +171,102 @@ EXAMPLES = r"""
 RETURN = r"""
 oidc_provider:
   description:
-    - The provider as croit reports it after the change (C(OidcConfigResponse) in the croit API),
-      with C(clientSecret) masked.
-    - Before the change in check mode; empty when the provider does not exist.
+    - The provider as croit reports it after the change (C(OidcConfigResponse) in the croit API), with
+      C(clientSecret) masked.
+    - In check mode, the provider before the change. Empty when the provider does not exist.
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's id of the provider.
+      returned: when the provider exists
+      type: int
+      sample: 2
+    name:
+      description: Name of the provider.
+      returned: when the provider exists
+      type: str
+      sample: Keycloak
+    discoveryUrl:
+      description: Discovery URL of the provider.
+      returned: when the provider exists
+      type: str
+      sample: https://sso.example.com/realms/ops/.well-known/openid-configuration
+    clientId:
+      description: Client ID croit uses.
+      returned: when the provider exists
+      type: str
+      sample: croit
+    clientSecret:
+      description: Always masked as C(********) when a secret is stored; null otherwise.
+      returned: when the provider exists
+      type: str
+      sample: "********"
+    clientAuth:
+      description: Client authentication method, one of C(None), C(Basic) or C(Post).
+      returned: when the provider exists
+      type: str
+      sample: Basic
+    scope:
+      description: Scopes requested from the provider.
+      returned: when the provider exists
+      type: str
+      sample: openid profile
+    manualRoles:
+      description: Whether roles are assigned by hand rather than from groups.
+      returned: when the provider exists
+      type: bool
+      sample: false
+    groupPointer:
+      description: Claim or JSON pointer to the groups list.
+      returned: when the provider exists
+      type: str
+      sample: groups
+    roleMapping:
+      description: Group names in the claims mapped to croit roles.
+      returned: when the provider exists
+      type: dict
+      sample:
+        storage-admins: admin
+    defaultRoles:
+      description: Roles every user from the provider gets.
+      returned: when the provider exists
+      type: list
+      elements: str
+      sample: [viewer]
 task:
-  description: The croit background task the change ran as, when there was one.
-  returned: when a task ran
+  description:
+    - The croit background task the change ran as (C(ManagedThreadTask) in the croit API).
+    - With O(wait=true) this is the finished task. With O(wait=false) it can still be running; follow it with
+      M(croit.ceph.task).
+  returned: when the change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, which M(croit.ceph.task) and M(croit.ceph.task_info) accept.
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Set ceph config
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

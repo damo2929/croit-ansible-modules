@@ -23,7 +23,8 @@ module: rbd
 short_description: Manage RBD images on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, grow, clone, flatten and delete RBD images, and manage their features and QoS limits.
+  - Creates, grows, clones, flattens and deletes RBD images, and manages their features and QoS limits.
+    An image is identified by O(pool), O(namespace) and O(name).
   - Only options that are set are managed; anything left out keeps its current value.
   - An image can only grow. A smaller O(size) fails the task instead of shrinking the image.
 author:
@@ -41,7 +42,8 @@ attributes:
 options:
   pool:
     description:
-      - Pool the image is in.
+      - Pool the image is in. For an image with O(erasure_coded_pool), this is the replicated pool holding
+        its metadata.
     type: str
     required: true
   namespace:
@@ -51,7 +53,7 @@ options:
     type: str
   name:
     description:
-      - Name of the image.
+      - Name of the image within O(pool) and O(namespace). Renaming images is not supported.
     type: str
     required: true
   state:
@@ -89,18 +91,18 @@ options:
     type: dict
     suboptions:
       pool:
-        description: Pool of the parent image.
+        description: Pool of the parent image to clone from.
         type: str
         required: true
       namespace:
         description: Namespace of the parent image. Leave unset for the default namespace.
         type: str
       image:
-        description: Name of the parent image.
+        description: Name of the parent image to clone from.
         type: str
         required: true
       snapshot:
-        description: Snapshot of the parent image to clone.
+        description: Snapshot of the parent image to clone. Ceph requires it to be protected unless clone format v2 is in use.
         type: str
         required: true
   flatten:
@@ -114,7 +116,7 @@ options:
     description:
       - QoS limits set on the image itself, keyed by rbd config key such as C(rbd_qos_iops_limit) or
         C(rbd_qos_bps_limit). Byte limits also accept a binary unit such as V(100M).
-      - A null value removes the image's own limit, so it falls back to the pool's
+      - A V(null) value removes the image's own limit, so it falls back to the pool's
         (see M(croit.ceph.pool_qos)).
       - Only the named limits are managed.
     type: dict
@@ -123,9 +125,30 @@ options:
       - Must be V(true) for O(state=absent) to delete an existing image and all its data.
     type: bool
     default: false
+notes:
+  - Deleting an image destroys its data and cannot be undone. Delete its snapshots first with
+    M(croit.ceph.rbd_snapshot).
+  - In check mode, QoS keys of an image that does not exist yet cannot be validated against croit.
+seealso:
+  - module: croit.ceph.rbd_info
+    description: Read RBD images.
+  - module: croit.ceph.rbd_snapshot
+    description: Take, protect and delete snapshots of an image.
+  - module: croit.ceph.rbd_namespace
+    description: Manage the namespaces images live in.
+  - module: croit.ceph.pool_qos
+    description: Set QoS limits for every image in a pool.
+  - name: croit API reference
+    description: The C(/pools/{pool}/rbds) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph block devices
+    description: Upstream RBD documentation, including image features.
+    link: https://docs.ceph.com/en/latest/rbd/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: VM disk with QoS
   croit.ceph.rbd:
     pool: rbd-ssd
@@ -135,11 +158,16 @@ EXAMPLES = r"""
     qos:
       rbd_qos_iops_limit: 1000
 
-- name: Grow the disk
+- name: Grow the disk and show its new size
   croit.ceph.rbd:
     pool: rbd-ssd
     name: vm-disk-01
     size: 200G
+  register: disk
+
+- name: Show the size in bytes
+  ansible.builtin.debug:
+    msg: "{{ disk.image.name }} is {{ disk.image.size }} bytes"
 
 - name: Image in a namespace with data on an erasure coded pool
   croit.ceph.rbd:
@@ -172,26 +200,94 @@ image:
   description:
     - The image as croit reads it from the cluster after the change (C(RbdImageResponse) in the croit API),
       including its snapshots.
-    - Before the change in check mode; empty when the image does not exist.
+    - In check mode, the image before the change. Empty when the image does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    name: vm-disk-01
-    pool: rbd-ssd
-    namespace: null
-    size: 107374182400
-    features: [LAYERING, EXCLUSIVE_LOCK, OBJECT_MAP, FAST_DIFF, DEEP_FLATTEN]
-    parent: null
-    snaps: []
+  contains:
+    name:
+      description: The image's name.
+      returned: always
+      type: str
+      sample: vm-disk-01
+    pool:
+      description: The pool the image is in.
+      returned: always
+      type: str
+      sample: rbd-ssd
+    namespace:
+      description: The namespace the image is in, or V(null) for the pool's default namespace.
+      returned: always
+      type: str
+      sample: null
+    size:
+      description: The image's size in bytes, or V(-1) where croit could not read it.
+      returned: always
+      type: int
+      sample: 107374182400
+    features:
+      description: The enabled rbd features, as croit spells them.
+      returned: always
+      type: list
+      elements: str
+      sample: [LAYERING, EXCLUSIVE_LOCK, OBJECT_MAP, FAST_DIFF, DEEP_FLATTEN]
+    erasureCodedPool:
+      description: The erasure coded pool holding the data, or V(null).
+      returned: always
+      type: str
+      sample: null
+    parent:
+      description: The snapshot the image was cloned from (C(pool), C(image), C(snapshot)), or V(null) when it is not a clone.
+      returned: always
+      type: dict
+      sample: null
+    snaps:
+      description: The image's snapshots, each with C(id), C(name) and C(protect).
+      returned: always
+      type: list
+      elements: dict
+      sample:
+        - id: 4
+          name: before-upgrade
+          protect: false
 qos:
-  description: The image's QoS settings after the change (C(QosCommandsResponse) in the croit API).
+  description:
+    - The image's QoS settings after the change (C(QosCommandsResponse) in the croit API), one row per
+      setting croit can limit.
   returned: when O(qos) is set and the image exists
   type: list
   elements: dict
+  contains:
+    setting:
+      description: The setting, with its rbd config key in C(command).
+      returned: always
+      type: dict
+      sample:
+        command: rbd_qos_iops_limit
+    value:
+      description: The limit set on the image itself, or V(null) where none is set.
+      returned: always
+      type: int
+      sample: 1000
+    inherited:
+      description: The pool's limit the image falls back to, if any.
+      returned: always
+      type: int
+      sample: 2000
 task:
-  description: The croit background task the change ran as (delete or flatten), when there was one.
-  returned: when a task ran
+  description: The croit background task the change ran as (deleting or flattening an image).
+  returned: when the change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task).
+      returned: always
+      type: int
+      sample: 418
+    state:
+      description: The task's state; V(FINISHED) after a successful wait.
+      returned: always
+      type: str
+      sample: FINISHED
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

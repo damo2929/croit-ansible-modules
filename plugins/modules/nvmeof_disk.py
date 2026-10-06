@@ -45,7 +45,7 @@ options:
     required: true
   pool:
     description:
-      - RBD pool of the image.
+      - RBD pool of the image to export. Together with O(gateway) and O(image) it identifies the disk.
     type: str
     required: true
   image:
@@ -94,9 +94,30 @@ options:
       - Must be V(true) for O(state=absent) to stop exporting an existing disk.
     type: bool
     default: false
+seealso:
+  - module: croit.ceph.rbd
+    description: Create and manage the RBD image before exporting it.
+  - module: croit.ceph.nvmeof_subsystem
+    description: Attach and detach disks on a subsystem.
+  - module: croit.ceph.nvmeof_gateway
+    description: Manage the NVMe-oF cluster and its ceph cluster configurations.
+  - module: croit.ceph.nvmeof_info
+    description: Read the exported disks.
+  - name: Ceph NVMe-oF gateway
+    description: Upstream documentation of the Ceph NVMe over Fabrics gateway.
+    link: https://docs.ceph.com/en/latest/rbd/nvmeof-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - O(state=absent) removes the namespace from B(every connected host), so it needs O(confirm_delete=true) even when
+    the RBD image is kept.
+  - When a disk is created with O(wait=false), O(size) is applied on a later run.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Export an image to a subsystem
   croit.ceph.nvmeof_disk:
     gateway: nvme-prod
@@ -105,6 +126,11 @@ EXAMPLES = r"""
     block_size: 4096
     subsystems:
       - nqn.2016-06.io.spdk:datastore1
+  register: lun0
+
+- name: Show the namespace UUID hosts will see
+  ansible.builtin.debug:
+    msg: "{{ lun0.disk.namespaceUUID }}"
 
 - name: Grow it
   croit.ceph.nvmeof_disk:
@@ -120,37 +146,135 @@ EXAMPLES = r"""
     image: ds1-lun0
     state: absent
     confirm_delete: true
+
+- name: Stop exporting it and delete the image with all its data
+  croit.ceph.nvmeof_disk:
+    gateway: nvme-prod
+    pool: rbd
+    image: scratch-lun
+    state: absent
+    delete_image: true
+    confirm_delete: true
 """
 
 RETURN = r"""
 disk:
   description:
-    - The exported disk as croit reports it after the change (C(NvmeOFDiskResponse)).
+    - The exported disk as croit reports it after the change (C(NvmeOFDiskResponse) in the croit API).
     - Before the change in check mode; empty when it is not exported.
   returned: always
   type: dict
-  sample:
-    id: 7
-    gatewayId: 1
-    pool: rbd
-    image: ds1-lun0
-    cluster: croit
-    blockSize: 4096
-    size: 4398046511104
-    subsystemNqns: [nqn.2016-06.io.spdk:datastore1]
+  contains:
+    id:
+      description: croit id of the disk.
+      returned: when the disk is exported
+      type: int
+      sample: 7
+    gatewayId:
+      description: croit id of the NVMe-oF cluster.
+      returned: when the disk is exported
+      type: int
+      sample: 1
+    pool:
+      description: RBD pool of the image.
+      returned: when the disk is exported
+      type: str
+      sample: rbd
+    image:
+      description: RBD image name.
+      returned: when the disk is exported
+      type: str
+      sample: ds1-lun0
+    cluster:
+      description: Ceph cluster configuration the targets read the image through.
+      returned: when the disk is exported
+      type: str
+      sample: croit
+    blockSize:
+      description: Block size of the namespace in bytes.
+      returned: when the disk is exported
+      type: int
+      sample: 4096
+    size:
+      description: Size of the disk in bytes, null when croit could not read it.
+      returned: when the disk is exported
+      type: int
+      sample: 4398046511104
+    subsystemNqns:
+      description: NQNs of the subsystems the disk is attached to.
+      returned: when the disk is exported
+      type: list
+      elements: str
+      sample: [nqn.2016-06.io.spdk:datastore1]
+    hosts:
+      description: croit ids of the hosts attached to the same subsystems as the disk.
+      returned: when the disk is exported
+      type: list
+      elements: int
+      sample: [3]
+    namespaceUUID:
+      description: NVMe UUID hosts see for the namespace.
+      returned: when the disk is exported
+      type: str
+      sample: 5b1f6a3e-2c4d-4e8f-9a0b-1c2d3e4f5a6b
+    lockState:
+      description:
+        - Who holds the RBD exclusive lock of the image, one of C(UNKNOWN), C(UNLOCKED), C(HELD_BY_OWNER),
+          C(HELD_BY_STANDBY) or C(HELD_ELSEWHERE).
+      returned: when the disk is exported
+      type: str
+      sample: HELD_BY_OWNER
 image_deleted:
   description: Whether the RBD image was (or, in check mode, would be) deleted along with the export.
   returned: when O(state=absent) removed an export
   type: bool
+  sample: false
 task:
-  description: The last croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Add NVMe-oF disk
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 tasks:
-  description: Every croit background task the change ran as, in order.
-  returned: when a task ran
+  description:
+    - Every croit background task the change ran as, in the order they ran. Each entry has the same fields as
+      RV(task).
+  returned: when the change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Add NVMe-oF disk
+      state: FINISHED
+      done: true
+      output: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

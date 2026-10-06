@@ -18,7 +18,9 @@ module: rbd_snapshot
 short_description: Manage snapshots of RBD images on a croit cluster
 version_added: 0.1.0
 description:
-  - Take, protect, unprotect and delete snapshots of an RBD image.
+  - Takes, protects, unprotects and deletes snapshots of an RBD image. A snapshot is identified by O(pool),
+    O(namespace), O(image) and its O(name).
+  - Leaving O(protected) unset keeps the snapshot's current protection.
   - To clone a snapshot into a new image, use the O(croit.ceph.rbd#module:clone_from) option of M(croit.ceph.rbd).
 author:
   - Damien Dye (@damo2929)
@@ -33,7 +35,7 @@ attributes:
 options:
   pool:
     description:
-      - Pool the image is in.
+      - Pool the snapshotted image is in.
     type: str
     required: true
   namespace:
@@ -47,7 +49,7 @@ options:
     required: true
   name:
     description:
-      - Name of the snapshot.
+      - Name of the snapshot within O(image). Renaming snapshots is not supported.
     type: str
     required: true
   state:
@@ -68,14 +70,36 @@ options:
       - Must be V(true) for O(state=absent) to delete an existing snapshot.
     type: bool
     default: false
+notes:
+  - Deleting a snapshot cannot be undone.
+seealso:
+  - module: croit.ceph.rbd
+    description: Clone a snapshot into a new image with O(croit.ceph.rbd#module:clone_from).
+  - module: croit.ceph.snapshot_schedule
+    description: Take RBD snapshots on a schedule.
+  - module: croit.ceph.rbd_info
+    description: Read an image with its snapshots.
+  - name: croit API reference
+    description: The C(/pools/{pool}/rbds/{rbd}/snapshots) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RBD snapshots
+    description: Upstream documentation of snapshots, protection and clones.
+    link: https://docs.ceph.com/en/latest/rbd/rbd-snapshot/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Snapshot before an upgrade
   croit.ceph.rbd_snapshot:
     pool: rbd-ssd
     image: vm-disk-01
     name: pre-upgrade
+  register: snap
+
+- name: Show the snapshot id
+  ansible.builtin.debug:
+    msg: "Snapshot {{ snap.snapshot.name }} has id {{ snap.snapshot.id }}"
 
 - name: Protected golden snapshot for clones
   croit.ceph.rbd_snapshot:
@@ -96,14 +120,26 @@ EXAMPLES = r"""
 RETURN = r"""
 snapshot:
   description:
-    - The snapshot after the change (C(RbdImageSnapshot) in the croit API). Before it in check mode;
-      empty when the snapshot does not exist.
+    - The snapshot after the change (C(RbdImageSnapshot) in the croit API).
+    - In check mode, the snapshot before the change. Empty when the snapshot does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    id: 12
-    name: pre-upgrade
-    protect: false
+  contains:
+    id:
+      description: Ceph's numeric snapshot id.
+      returned: always
+      type: int
+      sample: 12
+    name:
+      description: The snapshot's name.
+      returned: always
+      type: str
+      sample: pre-upgrade
+    protect:
+      description: Whether the snapshot is protected from deletion.
+      returned: always
+      type: bool
+      sample: false
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

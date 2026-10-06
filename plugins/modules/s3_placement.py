@@ -19,12 +19,13 @@ module: s3_placement
 short_description: Manage S3 placement rules and storage classes on a croit cluster
 version_added: 0.1.0
 description:
-  - A placement rule decides which pools a bucket's objects, indexes and metadata are stored in. Each of its
-    storage classes may store objects in a pool of its own.
-  - Manages one storage class of one placement rule. The V(STANDARD) class is the rule itself. Creating it
-    creates the rule, and deleting it deletes the rule with all its storage classes.
-  - Pools cannot be changed after creation, because objects already stored would no longer be addressable.
-    A different pool fails the task.
+  - A placement rule decides which pools a bucket's objects, indexes and metadata are stored in. Each of its storage
+    classes may store objects in a pool of its own.
+  - Manages one storage class of one placement rule, identified by O(name) and O(storage_class). The V(STANDARD)
+    class is the rule itself; creating it creates the rule, and deleting it deletes the rule with all of its storage
+    classes.
+  - Pools cannot be changed after creation, because objects already stored would no longer be addressable. A
+    different pool fails the task instead of recreating the rule.
   - croit does not support these changes on clusters in a multisite setup, and refuses them there.
 author:
   - Damien Dye (@damo2929)
@@ -46,64 +47,85 @@ options:
   storage_class:
     description:
       - Storage class of the rule. V(STANDARD) is the rule itself.
-      - Any other class needs the rule to exist already.
+      - Any other class needs the rule to exist already; create it first with O(storage_class=STANDARD).
     type: str
     default: STANDARD
   state:
     description:
       - Whether the storage class should exist.
-      - V(absent) needs O(confirm_delete=true). croit refuses to remove a class or rule any bucket still stores
-        in. Removing the default placement, or a rule that has other storage classes, needs
-        O(ignore_warnings=true).
+      - V(absent) needs O(confirm_delete=true). croit refuses to remove a class or rule any bucket still stores in.
+        Removing the default placement, or a rule that has other storage classes, also needs O(ignore_warnings=true).
     type: str
     choices: [present, absent]
     default: present
   data_pool:
     description:
-      - Pool the objects of this storage class are stored in. Required to create it.
+      - Pool the objects of this storage class are stored in, as managed with M(croit.ceph.pool).
+      - Required to create the class; create-only afterwards, so a different value fails the task.
     type: str
   index_pool:
     description:
-      - Pool the rule's bucket indexes are stored in. Only for V(STANDARD); croit uses the zone's own index pool
-        when not set. Cannot be erasure coded.
+      - Pool the rule's bucket indexes are stored in. Only valid for V(STANDARD).
+      - croit uses the zone's own index pool when not set. It cannot be erasure coded, and it is create-only.
     type: str
   data_extra_pool:
     description:
-      - Pool for the rule's extra metadata. Only for V(STANDARD); croit uses the zone's own non-EC pool when not
-        set. Cannot be erasure coded.
+      - Pool for the rule's extra metadata, such as incomplete multipart uploads. Only valid for V(STANDARD).
+      - croit uses the zone's own non-EC pool when not set. It cannot be erasure coded, and it is create-only.
     type: str
   default:
     description:
-      - Make this rule and storage class the zonegroup's default placement, where new buckets land unless they
-        name another.
-      - V(false) on the current default fails, because croit cannot unset the default. Make another placement
-        the default instead.
+      - Make this rule and storage class the zonegroup's default placement, where new buckets land unless they or
+        their owner name another.
+      - V(false) on the current default fails, because croit cannot unset the default; make another placement the
+        default instead. When unset, the default placement is left alone.
     type: bool
   confirm_delete:
     description:
-      - Must be V(true) for O(state=absent) to remove an existing storage class or rule.
+      - Must be V(true) for O(state=absent) to remove an existing storage class or rule. Without it the module fails,
+        in check mode as well.
     type: bool
     default: false
+seealso:
+  - module: croit.ceph.s3_bucket
+    description: Create buckets on a placement rule.
+  - module: croit.ceph.s3_user
+    description: Set a user's default placement and storage class.
+  - module: croit.ceph.pool
+    description: Create the pools a placement rule stores in.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/placements) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RGW pool placement and storage classes
+    description: Upstream documentation of placement targets and storage classes.
+    link: https://docs.ceph.com/en/latest/radosgw/placement/
 """
 
 EXAMPLES = r"""
-- name: Placement rule on an erasure coded data pool
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create a placement rule on an erasure coded data pool
   croit.ceph.s3_placement:
     name: ec-placement
     data_pool: default.rgw.buckets.data-ec
 
-- name: Cold storage class on HDDs
+- name: Add a cold storage class on an HDD pool
   croit.ceph.s3_placement:
     name: ec-placement
     storage_class: COLD
     data_pool: rgw-cold
 
-- name: New buckets land on the EC placement
+- name: Make new buckets land on the EC placement
   croit.ceph.s3_placement:
     name: ec-placement
     default: true
+  register: placement
 
-- name: Remove the storage class
+- name: Show the pools the default placement uses
+  ansible.builtin.debug:
+    msg: "Data in {{ placement.placement.dataPool }}, indexes in {{ placement.placement.indexPool }}"
+
+- name: Remove the cold storage class
   croit.ceph.s3_placement:
     name: ec-placement
     storage_class: COLD
@@ -113,16 +135,42 @@ EXAMPLES = r"""
 
 RETURN = r"""
 placement:
-  description: The storage class row (C(RgwPlacementPolicyResponse)) after the run; empty when it does not exist.
+  description:
+    - The storage class row (C(RgwPlacementPolicyResponse) in the croit API) after the run.
+    - In check mode, the row as it was before. Empty when the class does not exist or was removed.
   returned: always
   type: dict
-  sample:
-    name: ec-placement
-    storageClass: STANDARD
-    dataPool: default.rgw.buckets.data-ec
-    indexPool: default.rgw.buckets.index
-    dataExtraPool: default.rgw.buckets.non-ec
-    isDefault: false
+  contains:
+    name:
+      description: The placement rule's name.
+      returned: when the storage class exists
+      type: str
+      sample: ec-placement
+    storageClass:
+      description: The storage class this row is about.
+      returned: when the storage class exists
+      type: str
+      sample: STANDARD
+    dataPool:
+      description: The pool the objects of this class are stored in.
+      returned: when the storage class exists
+      type: str
+      sample: default.rgw.buckets.data-ec
+    indexPool:
+      description: The pool the rule's bucket indexes are stored in.
+      returned: when the storage class exists
+      type: str
+      sample: default.rgw.buckets.index
+    dataExtraPool:
+      description: The pool for the rule's extra metadata.
+      returned: when the storage class exists
+      type: str
+      sample: default.rgw.buckets.non-ec
+    isDefault:
+      description: Whether new buckets land here unless they say otherwise.
+      returned: when the storage class exists
+      type: bool
+      sample: false
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

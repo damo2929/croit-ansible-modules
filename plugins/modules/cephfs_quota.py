@@ -19,10 +19,11 @@ module: cephfs_quota
 short_description: Manage quotas and the data layout of CephFS directories on a croit cluster
 version_added: 0.1.0
 description:
-  - Sets the byte and file quota of a CephFS directory, and the data pool (layout) new files in it are
-    stored in, through the croit API.
+  - Sets the byte and file quota of a CephFS directory, and the data pool (layout) that new files in it
+    are stored in, through the croit API. The directory is identified by O(volume) and O(path), and must
+    already exist.
   - Only options that are set are managed; anything left out keeps its current value.
-  - The directory must already exist.
+  - V(unlimited) or V(0) as a limit removes that limit; O(state=absent) removes both limits.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -36,7 +37,8 @@ attributes:
 options:
   path:
     description:
-      - Absolute path of the directory inside the CephFS volume, for example V(/projects/alpha).
+      - Absolute path of the directory inside the CephFS volume, for example V(/projects/alpha). A relative
+        path fails the task.
       - The root of a filesystem cannot have a quota.
     type: str
     required: true
@@ -55,34 +57,66 @@ options:
   max_bytes:
     description:
       - Byte quota, as bytes or with a binary unit such as V(500G) or V(10T).
-      - V(unlimited) (or V(0)) removes the byte limit.
+      - V(unlimited) (or V(0)) removes the byte limit. When not set, the current byte limit is kept.
     type: str
   max_files:
     description:
-      - Maximum number of files and directories. V(0) removes the file limit.
+      - Maximum number of files and directories below the directory. V(0) removes the file limit.
+      - When not set, the current file limit is kept. Negative values fail the task.
     type: int
   layout_pool:
     description:
-      - Data pool that new files below the directory are stored in. Must be one of the volume's data pools.
-      - Changing it only affects files created afterwards.
-      - An empty string makes the directory inherit its parent's layout again.
+      - Data pool that new files below the directory are stored in. Must be one of the volume's eligible
+        data pools; any other pool fails the task and lists the eligible ones.
+      - Changing it only affects files created afterwards; existing files stay where they are.
+      - An empty string makes the directory inherit its parent's layout again. When not set, the layout
+        pool is left alone.
     type: str
   layout_namespace:
     description:
       - RADOS namespace inside O(layout_pool) that new files are stored in.
-      - An empty string removes the namespace.
+      - An empty string removes the namespace. When not set, the namespace is left alone.
     type: str
+notes:
+  - The layout is only read and compared when O(layout_pool) or O(layout_namespace) is set.
+seealso:
+  - module: croit.ceph.cephfs_subvolume
+    description: Subvolumes, whose size is also a CephFS quota.
+  - module: croit.ceph.cephfs_volume
+    description: Manage the CephFS volume.
+  - module: croit.ceph.pool
+    description: Create the data pools a layout can point at.
+  - name: croit API reference
+    description: The croit REST API, including C(/cephfs/quota) and C(/cephfs/layout).
+    link: https://www.croit.io/api-docs
+  - name: CephFS quotas
+    description: Upstream documentation of CephFS quotas.
+    link: https://docs.ceph.com/en/latest/cephfs/quota/
+  - name: CephFS file layouts
+    description: Upstream documentation of CephFS file layouts.
+    link: https://docs.ceph.com/en/latest/cephfs/file-layouts/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Limit a project directory to 10 TiB and one million files
   croit.ceph.cephfs_quota:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     volume: cephfs
     path: /projects/alpha
     max_bytes: 10T
     max_files: 1000000
+  register: alpha
+
+- name: Show the byte limit croit reports
+  ansible.builtin.debug:
+    msg: "{{ alpha.quota.maxBytes }} bytes"
+
+- name: Lift only the file limit, keeping the byte limit
+  croit.ceph.cephfs_quota:
+    volume: cephfs
+    path: /projects/alpha
+    max_files: 0
 
 - name: Store new archive files on the EC data pool
   croit.ceph.cephfs_quota:
@@ -90,7 +124,7 @@ EXAMPLES = r"""
     path: /archive
     layout_pool: cephfs.cephfs.ec-data
 
-- name: Remove the quota
+- name: Remove both quota limits
   croit.ceph.cephfs_quota:
     volume: cephfs
     path: /projects/alpha
@@ -99,19 +133,37 @@ EXAMPLES = r"""
 
 RETURN = r"""
 quota:
-  description: The directory's quota after the change (C(CephFsQuota) in the croit API); before it in check mode.
+  description:
+    - The directory's quota after the change (C(CephFsQuota) in the croit API); before it in check mode.
   returned: always
   type: dict
-  sample:
-    maxBytes: 10995116277760
-    maxFiles: 1000000
+  contains:
+    maxBytes:
+      description: Byte limit, or null when none is set.
+      returned: always
+      type: int
+      sample: 10995116277760
+    maxFiles:
+      description: File limit, or null when none is set.
+      returned: always
+      type: int
+      sample: 1000000
 layout:
-  description: The directory's layout after the change (C(CephFsLayout) in the croit API); before it in check mode.
+  description:
+    - The directory's layout after the change (C(CephFsLayout) in the croit API); before it in check mode.
   returned: when O(layout_pool) or O(layout_namespace) is set
   type: dict
-  sample:
-    pool: cephfs.cephfs.ec-data
-    namespace: null
+  contains:
+    pool:
+      description: Data pool new files are stored in, or null when it is inherited.
+      returned: always
+      type: str
+      sample: cephfs.cephfs.ec-data
+    namespace:
+      description: RADOS namespace inside the pool, or null when none is set.
+      returned: always
+      type: str
+      sample: null
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule, parse_quota

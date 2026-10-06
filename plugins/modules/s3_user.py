@@ -21,9 +21,10 @@ module: s3_user
 short_description: Manage S3 (RGW) users on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete S3 users of the Ceph object gateway through the croit API, including the
+  - Create, update and delete S3 users of the Ceph object gateway (RGW) through the croit API, including the
     user quota and the per-bucket quota.
-  - Only options that are set are managed; anything left out keeps its current value.
+  - The user is identified by O(uid), optionally qualified by O(tenant). Only options that are set are managed;
+    anything left out keeps its current value.
   - Access keys are managed with M(croit.ceph.s3_user_key) and subusers with M(croit.ceph.s3_subuser).
 author:
   - Damien Dye (@damo2929)
@@ -41,78 +42,108 @@ options:
   uid:
     description:
       - The user id. A user in a tenant is addressed as C(tenant$uid); either pass it that way or set O(tenant).
+      - If O(uid) already names a tenant and O(tenant) is also set, both must name the same tenant.
     type: str
     required: true
   tenant:
     description:
-      - Tenant of the user. Combined with O(uid) as C(tenant$uid).
+      - Tenant of the user. It is combined with O(uid) as C(tenant$uid).
+      - Leave unset for a user without a tenant.
     type: str
   state:
     description:
       - Whether the user should exist.
-      - croit refuses to delete a user that still owns buckets; delete or move the buckets first.
+      - V(absent) deletes the user. croit refuses to delete a user that still owns buckets, so the module fails
+        before any change and lists the buckets; delete them with M(croit.ceph.s3_bucket) or move them to
+        another owner first.
     type: str
     choices: [present, absent]
     default: present
   display_name:
     description:
-      - The user's display name. Required when the user is created.
+      - The user's display name.
+      - Required when the user is created; when unset on an existing user, the name is left alone.
     type: str
   email:
     description:
-      - The user's email address. An empty string removes it.
+      - The user's email address.
+      - An empty string removes the address.
     type: str
   default_placement:
     description:
-      - Placement rule new buckets of this user land on. An empty string resets it to the zone's default.
+      - Placement rule that new buckets of this user land on, as managed with M(croit.ceph.s3_placement).
+      - An empty string resets it to the zone's default placement.
     type: str
   default_storage_class:
     description:
-      - Storage class new objects of this user land on.
+      - Storage class that new objects of this user land on.
+      - An empty string resets it to the placement rule's own default storage class.
     type: str
   suspended:
     description:
       - Whether the gateway refuses this user's requests.
+      - When a new user is created suspended, croit creates it first and suspends it in a second request.
     type: bool
   user_quota:
     description:
-      - Quota over everything the user stores, across all of their buckets.
-      - Only the sub-options that are set are managed.
+      - Quota over everything the user stores, across all of their buckets together.
+      - Only the sub-options that are set are managed; the others keep their current values.
     type: dict
     suboptions:
       enabled:
-        description: Whether the quota is enforced.
+        description: Whether the quota is enforced. A quota with bounds but V(false) here is not enforced.
         type: bool
       max_size:
         description:
-          - Maximum size, as bytes or with a binary unit such as V(500G). V(-1) or V(unlimited) means no size bound.
+          - Maximum total size, as bytes or with a binary unit such as V(500G) or V(10T).
+          - V(-1) or V(unlimited) means no size bound.
         type: str
       max_objects:
         description: Maximum number of objects. V(-1) means no object bound.
         type: int
   bucket_quota:
     description:
-      - Quota applied to each of the user's buckets separately.
-      - Only the sub-options that are set are managed.
+      - Quota applied to each of the user's buckets separately, as the default for their buckets.
+      - Only the sub-options that are set are managed; the others keep their current values.
+      - A single bucket's own quota is managed with O(croit.ceph.s3_bucket#module:quota).
     type: dict
     suboptions:
       enabled:
-        description: Whether the quota is enforced.
+        description: Whether the quota is enforced. A quota with bounds but V(false) here is not enforced.
         type: bool
       max_size:
         description:
-          - Maximum size, as bytes or with a binary unit such as V(500G). V(-1) or V(unlimited) means no size bound.
+          - Maximum size of each bucket, as bytes or with a binary unit such as V(500G) or V(10T).
+          - V(-1) or V(unlimited) means no size bound.
         type: str
       max_objects:
-        description: Maximum number of objects. V(-1) means no object bound.
+        description: Maximum number of objects per bucket. V(-1) means no object bound.
         type: int
+notes:
+  - Deleting a user removes its access keys and subusers. Clients using those keys immediately lose access.
+  - The quotas are compared as RGW reports them, where any negative bound means unlimited and is shown as V(-1).
+seealso:
+  - module: croit.ceph.s3_user_info
+    description: Read S3 users, optionally with the buckets each one owns.
+  - module: croit.ceph.s3_user_key
+    description: Manage the S3 access keys of a user or subuser.
+  - module: croit.ceph.s3_subuser
+    description: Manage the subusers of an S3 user.
+  - module: croit.ceph.s3_bucket
+    description: Manage the buckets an S3 user owns.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/users) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RGW administration guide
+    description: Upstream documentation of RGW users and quotas.
+    link: https://docs.ceph.com/en/latest/radosgw/admin/
 """
 
 EXAMPLES = r"""
-- name: S3 user for the backup service with a 10 TiB quota
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create an S3 user for the backup service with a 10 TiB quota
   croit.ceph.s3_user:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     uid: backup
     display_name: Backup service
     email: backup@example.com
@@ -120,12 +151,26 @@ EXAMPLES = r"""
       enabled: true
       max_size: 10T
 
-- name: Suspend a user
+- name: Limit every bucket of the user to one million objects
   croit.ceph.s3_user:
-    uid: tenant1$alice
-    suspended: true
+    uid: backup
+    bucket_quota:
+      enabled: true
+      max_objects: 1000000
 
-- name: Delete a user (it must not own buckets)
+- name: Create a user in a tenant, suspended until it is needed
+  croit.ceph.s3_user:
+    uid: alice
+    tenant: tenant1
+    display_name: Alice
+    suspended: true
+  register: alice
+
+- name: Show the tenant-qualified uid croit assigned
+  ansible.builtin.debug:
+    msg: "Created {{ alice.user.uid }}"
+
+- name: Delete a user that no longer owns any buckets
   croit.ceph.s3_user:
     uid: backup
     state: absent
@@ -135,27 +180,97 @@ RETURN = r"""
 user:
   description:
     - The user as croit reports it after the change (C(RgwUserResponse) in the croit API).
-    - Before the change in check mode; empty when the user does not exist.
+    - In check mode, the user as it was before; empty when the user does not exist or was deleted.
+    - The user's access keys are never part of this result.
   returned: always
   type: dict
-  sample:
-    uid: backup
-    name: Backup service
-    email: backup@example.com
-    suspended: false
-    subusers: []
+  contains:
+    uid:
+      description: The user id, tenant-qualified as C(tenant$uid) where the user has a tenant.
+      returned: when the user exists
+      type: str
+      sample: backup
+    name:
+      description: The display name.
+      returned: when the user exists
+      type: str
+      sample: Backup service
+    email:
+      description: The email address, empty where none is set.
+      returned: when the user exists
+      type: str
+      sample: backup@example.com
+    suspended:
+      description: Whether RGW refuses the user's requests.
+      returned: when the user exists
+      type: bool
+      sample: false
+    defaultPlacement:
+      description: Placement rule new buckets land on, or null for the zone's default.
+      returned: when the user exists
+      type: str
+      sample: default-placement
+    defaultStorageClass:
+      description: Storage class new objects land on, or null for the placement rule's own.
+      returned: when the user exists
+      type: str
+      sample: STANDARD
+    subusers:
+      description: The user's subusers, each with C(subuser) and C(permissions).
+      returned: when the user exists
+      type: list
+      elements: dict
+      sample:
+        - subuser: reader
+          permissions: read
     userQuota:
-      enabled: true
-      maxSize: 10995116277760
-      maxObjects: -1
+      description: The quota over all of the user's buckets together, with C(enabled), C(maxSize) and C(maxObjects).
+      returned: when the user exists
+      type: dict
+      sample:
+        enabled: true
+        maxSize: 10995116277760
+        maxObjects: -1
     bucketQuota:
-      enabled: false
-      maxSize: -1
-      maxObjects: -1
+      description: The quota applied to each of the user's buckets, with C(enabled), C(maxSize) and C(maxObjects).
+      returned: when the user exists
+      type: dict
+      sample:
+        enabled: false
+        maxSize: -1
+        maxObjects: -1
 task:
-  description: The last croit background task the change ran as, when there was one.
-  returned: when a task ran
+  description:
+    - The croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Create S3 user
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

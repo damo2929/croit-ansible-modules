@@ -20,10 +20,11 @@ module: s3_user_key
 short_description: Manage S3 access keys of an S3 (RGW) user or subuser on a croit cluster
 version_added: 0.1.0
 description:
-  - Ensures one S3 credential pair (access key and secret key) exists, or not, for an S3 user or one of
-    its subusers.
-  - croit reports the stored secret, so the secret is compared and only rewritten when it differs. Secrets
-    are never returned or shown in a diff.
+  - Ensures one S3 credential pair (access key and secret key) exists, or does not exist, for an S3 user or one
+    of its subusers. The key is identified by O(uid), the optional O(subuser) and O(access_key).
+  - croit reports the stored secret, so the secret is compared and only rewritten when it differs. When
+    O(secret_key) is not set for an existing key, its secret is left alone.
+  - Secrets are never returned and appear in a diff only as a masked placeholder.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -37,11 +38,12 @@ attributes:
   diff_mode:
     support: full
     details:
-      - Secrets are shown as masked placeholders, never as their value.
+      - Secrets are shown as V(********), or V(******** (changed)) when they would be replaced, never as their value.
 options:
   uid:
     description:
-      - The S3 user the key belongs to, tenant-qualified as C(tenant$uid) where needed.
+      - The S3 user the key belongs to, tenant-qualified as C(tenant$uid) where the user has a tenant.
+      - The user must already exist, see M(croit.ceph.s3_user).
     type: str
     required: true
   subuser:
@@ -56,68 +58,137 @@ options:
     required: true
   secret_key:
     description:
-      - The secret key. Required when the key does not exist yet.
-      - When not set for an existing key, its secret is left alone.
+      - The secret key.
+      - Required when the key does not exist yet. When not set for an existing key, its secret is left alone;
+        when set and different from the stored secret, the secret is replaced.
     type: str
   state:
     description:
       - Whether the key should exist.
+      - V(absent) removes the key; clients using it immediately lose access.
     type: str
     choices: [present, absent]
     default: present
   exclusive:
     description:
-      - Remove every other key of the same user or subuser, so O(access_key) is its only key.
-      - Useful for key rotation. Only valid with O(state=present).
+      - Remove every other key of the same user or subuser, so that O(access_key) is its only key.
+      - Useful for key rotation. Keys of other subusers, or of the user when O(subuser) is set, are not touched.
+      - Only valid with O(state=present).
     type: bool
     default: false
 notes:
-  - croit's API takes the secret as a query parameter, so it may appear in the access logs of proxies
-    between Ansible and croit.
+  - croit's API takes the secret key as a query parameter, so it may appear in the access logs of proxies between
+    Ansible and croit. The collection itself never puts it into messages or results.
+  - Store secret keys in Ansible Vault and set C(no_log) on tasks that template them from other sources.
+seealso:
+  - module: croit.ceph.s3_user
+    description: Create the S3 user a key belongs to.
+  - module: croit.ceph.s3_subuser
+    description: Create the subuser a key belongs to.
+  - module: croit.ceph.s3_user_info
+    description: Read S3 users and their subusers (keys are never returned).
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/users/{uid}/keys) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RGW administration guide
+    description: Upstream documentation of RGW users and their keys.
+    link: https://docs.ceph.com/en/latest/radosgw/admin/
 """
 
 EXAMPLES = r"""
-- name: Key for the backup user
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Give the backup user an access key
   croit.ceph.s3_user_key:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     uid: backup
     access_key: BACKUPACCESSKEY0001
     secret_key: "{{ vault_backup_s3_secret }}"
 
-- name: Rotate to a new key and remove all older ones
+- name: Rotate to a new key and remove all older keys of the user
   croit.ceph.s3_user_key:
     uid: backup
     access_key: BACKUPACCESSKEY0002
     secret_key: "{{ vault_backup_s3_secret_new }}"
     exclusive: true
+  register: rotation
 
-- name: Key for a subuser
+- name: Report which keys the rotation removed
+  ansible.builtin.debug:
+    msg: "Removed {{ rotation.removed_keys | join(', ') or 'nothing' }}"
+
+- name: Give a subuser its own key
   croit.ceph.s3_user_key:
     uid: backup
     subuser: monitor
     access_key: MONITORACCESSKEY01
     secret_key: "{{ vault_monitor_s3_secret }}"
+
+- name: Remove a key that is no longer used
+  croit.ceph.s3_user_key:
+    uid: backup
+    access_key: BACKUPACCESSKEY0001
+    state: absent
 """
 
 RETURN = r"""
 key:
   description:
-    - The key after the change, without its secret. Empty when it does not exist.
+    - The key after the change, without its secret.
+    - In check mode, the key as it was before. Empty when the key does not exist or was removed.
   returned: always
   type: dict
-  sample:
-    user: backup
-    access_key: BACKUPACCESSKEY0001
-task:
-  description: The last croit background task the change ran as, when there was one.
-  returned: when a task ran
-  type: dict
+  contains:
+    user:
+      description: The identity the key belongs to, C(uid) or C(uid:subuser).
+      returned: when the key exists
+      type: str
+      sample: backup
+    access_key:
+      description: The access key.
+      returned: when the key exists
+      type: str
+      sample: BACKUPACCESSKEY0001
 removed_keys:
-  description: Access keys removed because of O(exclusive=true) (or that would be, in check mode).
+  description:
+    - Access keys of the same user or subuser that were removed because of O(exclusive=true).
+    - In check mode, the keys that would be removed.
   returned: when O(exclusive=true)
   type: list
   elements: str
+  sample:
+    - BACKUPACCESSKEY0001
+task:
+  description:
+    - The croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
+  returned: when the change ran as a croit background task
+  type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Set S3 key
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

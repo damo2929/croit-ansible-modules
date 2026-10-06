@@ -19,14 +19,13 @@ module: rgw_bootstrap
 short_description: Bootstrap S3 (RGW) on a croit cluster
 version_added: 0.1.0
 description:
-  - Gives a cluster its S3 surface once. croit creates the pools the object gateways store in, the realm,
-    zonegroup and zone, and one object gateway on each server in O(servers).
-  - croit only bootstraps a cluster that runs no object gateway yet. If the cluster already runs one, the
-    module reports no change and does not compare O(servers). Use M(croit.ceph.rgw_service) to add or remove
-    gateways afterwards.
-  - A cluster that joined a multisite setup as a secondary (M(croit.ceph.s3_multisite)) must not be
-    bootstrapped. Its gateways are added with M(croit.ceph.rgw_service) instead, and the module refuses
-    to bootstrap it.
+  - Gives a cluster its S3 surface once. croit creates the pools the object gateways store their data in, the
+    realm, zonegroup and zone, and one object gateway on each server in O(servers).
+  - croit only bootstraps a cluster that runs no object gateway yet. If the cluster already runs one, the module
+    reports no change and does not compare O(servers). Use M(croit.ceph.rgw_service) to add or remove gateways
+    afterwards.
+  - A cluster that joined a multisite setup as a secondary (M(croit.ceph.s3_multisite)) must not be bootstrapped.
+    The module refuses to bootstrap it; add its gateways with M(croit.ceph.rgw_service) instead.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -39,52 +38,157 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows whether the cluster gets bootstrapped and with which servers, realm, zonegroup and zone.
 options:
   servers:
     description:
-      - Servers to deploy the first object gateways on, by hostname or numeric id. At least one.
+      - Servers to deploy the first object gateways on, by hostname or numeric id. At least one is required.
+      - Only used when bootstrapping; on a cluster that already runs a gateway this list is not compared.
     type: list
     elements: str
     required: true
   realm:
     description:
-      - Realm to bootstrap in. When not set, croit uses the ceph configuration, then the realm the
-        cluster already has, then V(default).
-      - Only used when bootstrapping. On a bootstrapped cluster, a gateway that is itself configured for
-        another zone than O(zone) fails the task. The realm and zonegroup cannot be read back and are not
-        compared.
+      - Realm to bootstrap in. When not set, croit uses the ceph configuration, then the realm the cluster already
+        has, then V(default).
+      - Only used when bootstrapping. The realm cannot be read back and is not compared afterwards.
     type: str
   zonegroup:
     description:
       - Zonegroup to bootstrap in, with the same defaults as O(realm).
+      - Only used when bootstrapping. The zonegroup cannot be read back and is not compared afterwards.
     type: str
   zone:
     description:
       - Zone to bootstrap in, with the same defaults as O(realm).
+      - On a cluster that is already bootstrapped, a gateway that is configured for another zone than this one
+        fails the task, because the zone cannot be changed here.
     type: str
+notes:
+  - Bootstrapping creates pools and starts gateways. It cannot be undone with this module; remove gateways with
+    M(croit.ceph.rgw_service) and pools with M(croit.ceph.pool).
+seealso:
+  - module: croit.ceph.rgw_service
+    description: Add, remove and configure object gateways after the bootstrap.
+  - module: croit.ceph.s3_multisite
+    description: Make the cluster a multisite primary or join another site as a secondary.
+  - module: croit.ceph.s3_placement
+    description: Manage the placement rules and storage classes of the zone.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/bootstrap) endpoint this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph Object Gateway
+    description: Upstream documentation of the Ceph object gateway (RGW).
+    link: https://docs.ceph.com/en/latest/radosgw/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Bootstrap S3 with gateways on two nodes
   croit.ceph.rgw_bootstrap:
-    servers: [node1, node2]
-    zone: dc1
+    servers:
+      - node1
+      - node2
 
-- name: Add a third gateway later
-  croit.ceph.rgw_service:
-    servers: [node3]
+- name: Bootstrap S3 in a named realm, zonegroup and zone
+  croit.ceph.rgw_bootstrap:
+    servers:
+      - node1
+      - node2
+    realm: company
+    zonegroup: eu
+    zone: dc1
+  register: bootstrap
+
+- name: List the gateways the cluster now runs
+  ansible.builtin.debug:
+    msg: "{{ bootstrap.gateways | map(attribute='serverHostname') | list }}"
 """
 
 RETURN = r"""
 gateways:
-  description: The object gateway services (C(MultiServerServiceResponse) rows of type C(radosgw)) after the run.
+  description:
+    - The object gateway services (C(MultiServerServiceResponse) rows of type V(radosgw)) after the run.
+    - Empty in check mode when the cluster would be bootstrapped.
   returned: always
   type: list
   elements: dict
+  contains:
+    id:
+      description: The service's id.
+      returned: always
+      type: int
+      sample: 31
+    name:
+      description: The full systemd service name.
+      returned: always
+      type: str
+      sample: ceph-radosgw@rgw.node1
+    type:
+      description: The service type, always V(radosgw) here.
+      returned: always
+      type: str
+      sample: radosgw
+    server:
+      description: The id of the server the gateway runs on.
+      returned: always
+      type: int
+      sample: 3
+    serverHostname:
+      description: The hostname of the server the gateway runs on.
+      returned: always
+      type: str
+      sample: node1
+    multiServer:
+      description: Every server id the service runs on, for a gateway service that spans several servers.
+      returned: always
+      type: list
+      elements: int
+      sample: []
+    running:
+      description: Whether the gateway is running.
+      returned: always
+      type: bool
+      sample: true
+    state:
+      description: croit's state of the service.
+      returned: always
+      type: str
+      sample: ENABLED
 task:
-  description: The croit task the bootstrap ran as.
+  description:
+    - The croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
   returned: when the cluster was bootstrapped
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Bootstrap S3
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

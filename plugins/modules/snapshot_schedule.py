@@ -22,7 +22,7 @@ module: snapshot_schedule
 short_description: Manage scheduled CephFS and RBD snapshots on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete croit snapshot schedules for CephFS directories or RBD pools and images.
+  - Creates, updates and deletes croit snapshot schedules for CephFS directories or RBD pools and images.
   - A schedule is identified by O(type) and O(snapshot_prefix), plus O(volume) for CephFS when it is
     set, so playbooks never need croit's numeric schedule ids. Prefixes should therefore be unique per
     type (and volume); the module fails if more than one schedule matches.
@@ -95,18 +95,34 @@ options:
     elements: dict
     suboptions:
       pool:
-        description: RBD pool.
+        description: RBD pool to snapshot; alone, it covers every image in the pool.
         type: str
         required: true
       namespace:
-        description: RBD namespace within the pool.
+        description: RBD namespace within O(rbd_paths[].pool); covers every image in the namespace.
         type: str
       image:
-        description: A single RBD image.
+        description: A single RBD image to snapshot, within O(rbd_paths[].pool) and O(rbd_paths[].namespace).
         type: str
+notes:
+  - Deleting a schedule keeps the snapshots it already took. Remove CephFS snapshots on the filesystem, and
+    RBD snapshots with M(croit.ceph.rbd_snapshot).
+seealso:
+  - module: croit.ceph.rbd_snapshot
+    description: Take or delete a single RBD snapshot.
+  - module: croit.ceph.cluster_tuning
+    description: Set the timezone schedules are read in.
+  - name: croit API reference
+    description: The C(/snapshot-schedule) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: CephFS snapshots
+    description: Upstream documentation of CephFS snapshots.
+    link: https://docs.ceph.com/en/latest/cephfs/snapshots/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Hourly snapshots of two CephFS directories, keep a day
   croit.ceph.snapshot_schedule:
     type: cephfs
@@ -134,6 +150,11 @@ EXAMPLES = r"""
     type: rbd
     snapshot_prefix: nightly
     enabled: false
+  register: nightly
+
+- name: Show the schedule's paths
+  ansible.builtin.debug:
+    msg: "{{ nightly.schedule.pathsFormatted }}"
 
 - name: Remove a schedule
   croit.ceph.snapshot_schedule:
@@ -145,19 +166,58 @@ EXAMPLES = r"""
 RETURN = r"""
 schedule:
   description:
-    - The schedule as croit reports it after the change (C(CephFSSnapshotSchedule) or
-      C(RbdSnapshotSchedule) in the croit API).
-    - Before the change in check mode; empty when the schedule does not exist.
+    - The schedule as croit reports it after the change (C(CephFSSnapshotSchedule) or C(RbdSnapshotSchedule)
+      in the croit API).
+    - In check mode, the schedule before the change. Empty when the schedule does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    id: 4
-    cron: "0 * * * *"
-    enabled: true
-    snapshotPrefix: hourly
-    maxSnapshots: 24
-    paths: [/home, /projects]
-    volume: cephfs
+  contains:
+    id:
+      description: croit's numeric schedule id.
+      returned: always
+      type: int
+      sample: 4
+    cron:
+      description: When snapshots are taken.
+      returned: always
+      type: str
+      sample: "0 * * * *"
+    enabled:
+      description: Whether the schedule fires.
+      returned: always
+      type: bool
+      sample: true
+    snapshotPrefix:
+      description: Name prefix of the snapshots.
+      returned: always
+      type: str
+      sample: hourly
+    maxSnapshots:
+      description: How many snapshots are kept.
+      returned: always
+      type: int
+      sample: 24
+    paths:
+      description:
+        - For CephFS, the directories as strings. For RBD, entries with C(pool), C(namespace) and C(rbd).
+      returned: always
+      type: list
+      sample: [/home, /projects]
+    pathsFormatted:
+      description: The paths as one line of text.
+      returned: always
+      type: str
+      sample: /home, /projects
+    volume:
+      description: The CephFS volume.
+      returned: for O(type=cephfs)
+      type: str
+      sample: cephfs
+    failedSnapshots:
+      description: Snapshots croit could not create.
+      returned: always
+      type: list
+      sample: []
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

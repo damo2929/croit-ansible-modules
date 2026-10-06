@@ -34,6 +34,19 @@ attributes:
     support: full
   diff_mode:
     support: full
+notes:
+  - Deleting a bond that carries the address croit reaches the server on is refused unless
+    O(allow_management_ip_change=true), also in check mode.
+seealso:
+  - module: croit.ceph.server_nic
+    description: Set the bond's addresses and notes, using the bond's name.
+  - module: croit.ceph.server_vlan
+    description: Create VLAN interfaces on top of the bond.
+  - module: croit.ceph.server_info
+    description: Read servers with their interfaces.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -42,11 +55,12 @@ options:
     required: true
   name:
     description:
-      - Name of the bond, for example V(bond0).
+      - Name of the bond, for example V(bond0). It identifies the bond on the server and cannot be changed.
     type: str
     required: true
   state:
     description:
+      - V(present) creates the bond, or changes its members, mode and primary.
       - V(absent) deletes the bond and needs O(confirm_delete=true).
     type: str
     choices: [present, absent]
@@ -81,11 +95,18 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: LACP bond over two 25G ports
   croit.ceph.server_bond:
     server: storage-07
     name: bond0
     members: [ens1f0, ens1f1]
+  register: bond
+
+- name: Show the bond's members as croit ids
+  ansible.builtin.debug:
+    msg: "{{ bond.bond.name }} bonds interfaces {{ bond.bond.bondedNics }}"
 
 - name: Active/passive bond with a preferred port
   croit.ceph.server_bond:
@@ -94,15 +115,59 @@ EXAMPLES = r"""
     members: [ens2f0, ens2f1]
     mode: active_passive
     primary: ens2f0
+
+- name: Delete a bond
+  croit.ceph.server_bond:
+    server: storage-07
+    name: bond1
+    state: absent
+    confirm_delete: true
 """
 
 RETURN = r"""
 bond:
   description:
     - The bond interface as croit reports it after the change (C(NicResponse) in the croit API).
-    - Before the change in check mode; empty when it does not exist.
+    - Before the change in check mode; empty when it does not exist or after O(state=absent).
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's numeric interface id of the bond.
+      returned: when the bond exists
+      type: int
+      sample: 44
+    name:
+      description: Name of the bond.
+      returned: when the bond exists
+      type: str
+      sample: bond0
+    type:
+      description: Always V(bond) for a bond.
+      returned: when the bond exists
+      type: str
+      sample: bond
+    bondedNics:
+      description: croit interface ids of the members.
+      returned: when the bond exists
+      type: list
+      elements: int
+      sample: [31, 32]
+    bondType:
+      description: V(lacp) or V(active_passive).
+      returned: when the bond exists
+      type: str
+      sample: lacp
+    bondPrimary:
+      description: croit interface id of the primary member of an active/passive bond, or null.
+      returned: when the bond exists
+      type: int
+      sample: null
+    ip:
+      description: IPv4 address of the bond, or null.
+      returned: when the bond exists
+      type: str
+      sample: 10.0.0.17/24
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -36,6 +36,15 @@ attributes:
     support: full
   diff_mode:
     support: full
+notes:
+  - Switching O(variant) to V(frontier) cannot be reversed.
+  - O(registry.password) is never returned by croit; only C(passwordSet) shows whether one is stored.
+seealso:
+  - module: croit.ceph.image
+    description: Download, remove and select individual images.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   archs:
     description:
@@ -44,10 +53,10 @@ options:
     type: dict
     suboptions:
       x86_64:
-        description: Offer x86_64 images.
+        description: Whether croit downloads and offers x86_64 images. Not set means leave alone.
         type: bool
       arm64:
-        description: Offer arm64 images.
+        description: Whether croit downloads and offers arm64 images. Not set means leave alone.
         type: bool
   registry:
     description:
@@ -88,6 +97,8 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Offer only x86_64 images
   croit.ceph.image_config:
     archs:
@@ -101,6 +112,11 @@ EXAMPLES = r"""
       repository: croit/os-images
       username: croit-pull
       password: "{{ vault_registry_password }}"
+  register: mirror
+
+- name: Show whether croit has a registry password stored
+  ansible.builtin.debug:
+    msg: "password set: {{ mirror.registry.passwordSet }}"
 
 - name: Use croit's enhanced Ceph build
   croit.ceph.image_config:
@@ -112,18 +128,97 @@ archs:
   description: Enabled architectures after the change (C(ArchConfig) in the croit API).
   returned: when O(archs) is set
   type: dict
+  contains:
+    x86_64:
+      description: Whether x86_64 images are offered.
+      returned: always
+      type: bool
+      sample: true
+    arm64:
+      description: Whether arm64 images are offered.
+      returned: always
+      type: bool
+      sample: false
 registry:
   description: Registry settings after the change (C(RegistryStatus) in the croit API). The password is never returned.
   returned: when O(registry) is set
   type: dict
+  contains:
+    registry:
+      description: Registry host; empty for Docker Hub.
+      returned: always
+      type: str
+      sample: registry.example.com
+    repository:
+      description: Repository the OS images are read from; empty for croit's own catalog.
+      returned: always
+      type: str
+      sample: croit/os-images
+    username:
+      description: User croit logs in as; empty for anonymous reads.
+      returned: always
+      type: str
+      sample: croit-pull
+    passwordSet:
+      description: Whether croit has a password stored.
+      returned: always
+      type: bool
+      sample: true
+    plaintext:
+      description: Whether croit talks to the registry over plain HTTP.
+      returned: always
+      type: bool
+      sample: false
 config:
   description: Ceph build settings after the change (C(ImageConfigResponse) in the croit API).
   returned: when O(variant) is set
   type: dict
+  contains:
+    variant:
+      description: The Ceph build the images carry.
+      returned: always
+      type: str
+      sample: enhanced
+    hasEnhancedImages:
+      description: Whether images of croit's enhanced build are available.
+      returned: always
+      type: bool
+      sample: true
+    frontierEnabled:
+      description: Whether the frontier build is enabled.
+      returned: always
+      type: bool
+      sample: false
 task:
-  description: The croit background task a variant switch ran as.
+  description: The croit background task a variant switch ran as (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule

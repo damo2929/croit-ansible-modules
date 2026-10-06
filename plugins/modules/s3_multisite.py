@@ -23,7 +23,8 @@ version_added: 0.1.0
 description:
   - Puts a croit cluster's S3 into a multisite setup as the primary or as a secondary, promotes a secondary,
     sets a secondary's read-only flag and rewrites the endpoints other sites reach it on.
-  - The role is read from croit's multisite status, so a converged cluster is not touched again.
+  - The cluster is identified by the connection options; its current role is read from croit's multisite status,
+    so a converged cluster is not touched again. Options that are not set are left alone.
   - "Role changes: a standalone cluster becomes the V(primary) (convert) or joins another site's setup as a
     V(secondary) (join); a secondary becomes the V(primary) (promote, for failover and failback)."
   - Role changes are one-way and cluster-wide, need O(confirm_action=true), and are never made in check mode.
@@ -52,7 +53,7 @@ options:
   role:
     description:
       - The multisite role this cluster should have. When not set, the role is left alone.
-      - See the description for which changes are possible.
+      - See the description for which changes are possible. A primary cannot be turned into a secondary here.
     type: str
     choices: [primary, secondary]
   endpoints:
@@ -67,47 +68,52 @@ options:
   update_endpoints:
     description:
       - Rewrite the stored endpoints with O(endpoints) and commit the period, for example after gateways were
-        added or moved. Always reports a change and is skipped in check mode.
+        added or moved.
+      - This is a one-shot action. It always reports a change, is skipped in check mode and needs O(endpoints).
     type: bool
     default: false
   sync_user:
     description:
-      - S3 user id croit creates as the system user the sites replicate as. Required to become the primary.
+      - S3 user id croit creates as the system user the sites replicate as.
+      - Required to become the primary; ignored otherwise.
     type: str
   zone:
     description:
-      - Name of this cluster's new zone when joining as a secondary. Must not be used by another site.
+      - Name of this cluster's new zone when joining as a secondary. It must not be used by another site.
+      - Required to join as a secondary; ignored otherwise.
     type: str
   token:
     description:
-      - Base64 token from the primary site (O(return_token=true) there). It carries the sync user's secret key.
+      - Base64 token from the primary site (RV(token) with O(return_token=true) there). It carries the sync user's
+        secret key and is never logged.
       - When joining as a secondary, give exactly one of O(token) and O(primary_connection).
       - When promoting after a long outage, the token of whichever site holds the master role, so the stale
         realm is pulled first. Leave unset for an ordinary failover.
     type: str
   primary_connection:
     description:
-      - The primary's details spelled out, when it is not managed by croit. Alternative to O(token) when joining.
+      - The primary's details spelled out, when the primary is not managed by croit.
+      - Alternative to O(token) when joining as a secondary; ignored otherwise.
     type: dict
     suboptions:
       realm:
-        description: Realm name on the primary.
+        description: The realm's name on the primary.
         type: str
         required: true
       zonegroup:
-        description: Zonegroup name on the primary.
+        description: The zonegroup's name on the primary.
         type: str
         required: true
       access_key:
-        description: Access key of the sync user.
+        description: The access key of the sync user, a system user on the primary.
         type: str
         required: true
       secret_key:
-        description: Secret key of the sync user.
+        description: The secret key of the sync user. It is never logged.
         type: str
         required: true
       endpoints:
-        description: Where this site reaches the primary's S3, tried in order.
+        description: Where this site reaches the primary's S3, as C(http(s)://host:port), tried in order.
         type: list
         elements: str
         required: true
@@ -118,15 +124,15 @@ options:
     type: dict
     suboptions:
       url:
-        description: A peer RGW endpoint, as C(http(s)://host:port).
+        description: A peer RGW endpoint to pull the realm from, as C(http(s)://host:port).
         type: str
         required: true
       access_key:
-        description: Access key of the sync user on the peer.
+        description: The access key of the multisite sync user on the peer site.
         type: str
         required: true
       secret_key:
-        description: Secret key of that sync user.
+        description: The secret key of that sync user. It is never logged.
         type: str
         required: true
   readonly:
@@ -146,34 +152,66 @@ options:
   confirm_action:
     description:
       - Must be V(true) to convert, join or promote. These are one-way, cluster-wide changes.
+      - Without it the module fails before any change, in check mode as well.
     type: bool
     default: false
+notes:
+  - The token, the sync user's secret keys and O(primary_connection) / O(pull_from_peer) secrets are never shown in
+    logs or diffs. RV(token) is returned unmasked on purpose, so protect the task with C(no_log).
+  - croit restarts the S3 gateways of the site one after another during a role change, so S3 clients see brief
+    interruptions.
+seealso:
+  - module: croit.ceph.rgw_bootstrap
+    description: Bootstrap S3 on the site that becomes the primary.
+  - module: croit.ceph.rgw_service
+    description: Add the gateways of a site after it joined as a secondary.
+  - module: croit.ceph.s3_placement
+    description: Manage placement rules, which croit refuses to change once a cluster is in a multisite setup.
+  - name: croit API reference
+    description: The croit REST API, including the C(/s3/multisite) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RGW multi-site
+    description: Upstream documentation of RGW realms, zonegroups, zones and multi-site sync.
+    link: https://docs.ceph.com/en/latest/radosgw/multisite/
 """
 
 EXAMPLES = r"""
-- name: Site A becomes the multisite primary
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+# The join example targets a second cluster, so it sets that cluster's api_url and api_token itself.
+
+- name: Make site A the multisite primary and fetch the join token
   croit.ceph.s3_multisite:
     role: primary
-    endpoints: [http://10.1.0.11:80, http://10.1.0.12:80]
+    endpoints:
+      - http://10.1.0.11:80
+      - http://10.1.0.12:80
     sync_user: multisite-sync
     return_token: true
     confirm_action: true
   register: site_a
   no_log: true
-  delegate_to: localhost
 
-- name: Site B joins as a read-only secondary
+- name: Join site B as a read-only secondary
   croit.ceph.s3_multisite:
     api_url: https://croit-b/api
     api_token: "{{ vault_croit_b_token }}"
     role: secondary
     zone: site-b
-    endpoints: [http://10.2.0.11:80]
+    endpoints:
+      - http://10.2.0.11:80
     token: "{{ site_a.token }}"
     readonly: true
     confirm_action: true
 
-- name: Failover - promote site B
+- name: Read the sync state of this site
+  croit.ceph.s3_multisite:
+  register: sync
+
+- name: Show how many data shards are still behind
+  ansible.builtin.debug:
+    msg: "{{ sync.multisite.metrics.data.behindShards | default('n/a') }} data shard(s) behind"
+
+- name: Fail over by promoting this secondary, accepting croit's sync warning
   croit.ceph.s3_multisite:
     role: primary
     confirm_action: true
@@ -182,33 +220,97 @@ EXAMPLES = r"""
 - name: Make the secondary active-active
   croit.ceph.s3_multisite:
     readonly: false
+
+- name: Rewrite the endpoints after adding a gateway
+  croit.ceph.s3_multisite:
+    endpoints:
+      - http://10.1.0.11:80
+      - http://10.1.0.12:80
+      - http://10.1.0.13:80
+    update_endpoints: true
 """
 
 RETURN = r"""
 multisite:
-  description: croit's multisite status (C(RgwMultisiteStatusResponse)) after the run.
+  description:
+    - croit's multisite status (C(RgwMultisiteStatusResponse) in the croit API) after the run.
+    - In check mode, the status as it was before.
   returned: always
   type: dict
-  sample:
-    enabled: true
-    type: SECONDARY
-    readonly: true
+  contains:
+    enabled:
+      description: Whether the cluster takes part in a multisite setup at all.
+      returned: always
+      type: bool
+      sample: true
+    type:
+      description: Which side of the setup the cluster is, V(PRIMARY), V(SECONDARY) or V(UNKNOWN) (a secondary whose sync status could not be read).
+      returned: always
+      type: str
+      sample: SECONDARY
+    readonly:
+      description: Whether this zone refuses S3 writes. Only meaningful for a secondary, null otherwise.
+      returned: always
+      type: bool
+      sample: true
     metrics:
-      data: {behindShards: 0}
-      metadata: {behindShards: 0}
+      description: How far behind the sync of a secondary is, with C(data) and C(metadata), each with C(behindShards) and C(lastSync).
+      returned: always
+      type: dict
+      sample:
+        data:
+          behindShards: 0
+        metadata:
+          behindShards: 0
 token:
-  description: The token secondaries join with. A secret.
-  returned: when O(return_token=true) and the cluster is the primary
+  description:
+    - The base64 token secondaries join with. It is a secret that grants read and write access to this cluster's S3,
+      and it is returned unmasked, so protect the task with C(no_log).
+  returned: when O(return_token=true) and the cluster is (or, outside check mode, became) the primary
   type: str
+  sample: "********"
 tasks:
-  description: The croit tasks the changes ran as.
-  returned: when a change ran
+  description: Every croit background task the changes ran as, in order.
+  returned: when a change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Convert S3 to multisite primary
+      state: FINISHED
+      done: true
 task:
-  description: The last croit task the changes ran as.
-  returned: when a change ran
+  description:
+    - The last croit background task the changes ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the finished task; with O(wait=false) it may still be running.
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Convert S3 to multisite primary
+    state:
+      description: The task's state, one of V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating user backup ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule

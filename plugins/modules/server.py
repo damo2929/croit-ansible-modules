@@ -37,6 +37,23 @@ attributes:
       - O(action) is never run in check mode; it is reported as a change.
   diff_mode:
     support: full
+notes:
+  - O(action=reboot) and O(action=shutdown) take a storage node offline; they are refused unless
+    O(confirm_action=true), also in check mode.
+  - Changing O(ip) to an address the node does not have would cut croit off from it, so the module checks
+    the address against the server's own addresses before sending anything.
+seealso:
+  - module: croit.ceph.server_info
+    description: Read servers and their interfaces.
+  - module: croit.ceph.server_nic
+    description: Manage the network interfaces of a server.
+  - module: croit.ceph.ipmi
+    description: Power servers on and off through their BMC.
+  - module: croit.ceph.task
+    description: Answer the question a reboot or shutdown asks when ceph's safety check objects.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -100,6 +117,8 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Rename a node and note its rack
   croit.ceph.server:
     server: node-07
@@ -111,14 +130,23 @@ EXAMPLES = r"""
     server: storage-07
     image: "2510.0.squid"
 
-- name: Reboot a node (one at a time, behind ceph's safety check)
+- name: Read a node and show its state
+  croit.ceph.server:
+    server: storage-07
+  register: node
+
+- name: Show the node's state and management IP
+  ansible.builtin.debug:
+    msg: "{{ node.server.hostname }} is {{ node.server.state }} on {{ node.server.ip }}"
+
+- name: Reboot a node behind ceph's safety check (takes the node offline)
   croit.ceph.server:
     server: storage-07
     action: reboot
     confirm_action: true
     wait_timeout: 3600
 
-- name: Forget a decommissioned node
+- name: Forget a decommissioned node (the node itself is not touched)
   croit.ceph.server:
     server: storage-99
     state: absent
@@ -132,10 +160,83 @@ server:
     - Before the change in check mode; empty after O(state=absent).
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's numeric server id.
+      returned: when the server exists
+      type: int
+      sample: 7
+    hostname:
+      description: Hostname of the server.
+      returned: when the server exists
+      type: str
+      sample: storage-07
+    ip:
+      description: Management IP croit reaches the node on.
+      returned: when the server exists
+      type: str
+      sample: 10.0.0.17
+    ips:
+      description: Every IP address the node reports.
+      returned: when the server exists
+      type: list
+      elements: str
+      sample: ["10.0.0.17", "10.1.0.17"]
+    image:
+      description: OS image the server boots, or V(default).
+      returned: when the server exists
+      type: str
+      sample: default
+    state:
+      description: V(booting), V(running), V(offline), V(rebooting) or V(shutting_down).
+      returned: when the server exists
+      type: str
+      sample: running
+    notes:
+      description: Free text croit keeps about the server.
+      returned: when the server exists
+      type: str
+      sample: rack B4, U12
+    nrHugepages:
+      description: Configured number of 2 MiB hugepages.
+      returned: when the server exists
+      type: int
+      sample: 0
+    services:
+      description: Number of each service type the server carries, keyed by type (C(osd), C(mon), C(rgw), ...).
+      returned: when the server exists
+      type: dict
+      sample: {osd: 12, mon: 1, mgr: 1}
 task:
-  description: The croit background task of the settings change or of O(action), when there was one.
+  description: The croit background task of the settings change or of O(action), when there was one (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

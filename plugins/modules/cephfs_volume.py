@@ -18,9 +18,12 @@ module: cephfs_volume
 short_description: Manage CephFS volumes (filesystems) on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete CephFS volumes through the croit API.
-  - Creating a volume makes its metadata and data pools and turns standby-replay on, as croit does in its UI.
+  - Create, update and delete CephFS volumes (filesystems) through the croit API. A volume is
+    identified by its O(name).
+  - Creating a volume makes its metadata and data pools and turns standby-replay on, as croit does in
+    its UI. Settings that differ from croit's defaults are applied right after the volume is created.
   - Only options that are set are managed; anything left out keeps its current value.
+  - Removing a volume needs O(confirm_delete=true). Its pools, and the data in them, are left in place.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -36,7 +39,7 @@ attributes:
 options:
   name:
     description:
-      - Name of the CephFS volume.
+      - Name of the CephFS volume. Creating a volume also creates its pools, named after it.
     type: str
     required: true
   state:
@@ -50,32 +53,66 @@ options:
     default: present
   max_mds:
     description:
-      - Number of active MDS ranks.
-      - croit warns before this is changed on an existing volume, see O(ignore_warnings).
+      - Number of active MDS ranks. Must be at least V(1).
+      - croit warns before this is changed on an existing volume; see O(ignore_warnings).
+      - When not set, the current number of ranks is kept, and croit's default is used for a new volume.
     type: int
   allow_standby_replay:
     description:
-      - Keep a standby-replay MDS daemon for each rank. croit turns this on when it creates a volume.
+      - Keep a standby-replay MDS daemon for each active rank, for faster failover.
+      - croit turns this on when it creates a volume. When not set, the current setting is kept.
     type: bool
   confirm_delete:
     description:
-      - Must be V(true) for O(state=absent) to remove an existing volume.
+      - Must be V(true) for O(state=absent) to remove an existing volume. Without it the task fails,
+        in check mode too.
       - It also confirms croit's warning that removing a volume is irreversible, so O(ignore_warnings)
         is not needed for that.
     type: bool
     default: false
+notes:
+  - When a volume is created with O(wait=false), O(max_mds) and O(allow_standby_replay) are not applied
+    in the same run if they differ from croit's defaults; a later run applies them.
+  - Removing a volume disconnects every client that has it mounted.
+seealso:
+  - module: croit.ceph.cephfs_subvolume_group
+    description: Manage subvolume groups inside a volume.
+  - module: croit.ceph.cephfs_subvolume
+    description: Manage subvolumes inside a volume.
+  - module: croit.ceph.cephfs_quota
+    description: Set quotas and data layouts on CephFS directories.
+  - module: croit.ceph.service
+    description: Add the MDS daemons a volume needs.
+  - module: croit.ceph.pool
+    description: Remove the pools a deleted volume leaves behind.
+  - name: croit API reference
+    description: The croit REST API, including the C(/cephfs/volumes) endpoints.
+    link: https://www.croit.io/api-docs
+  - name: CephFS
+    description: Upstream CephFS documentation.
+    link: https://docs.ceph.com/en/latest/cephfs/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: CephFS volume with two active MDS ranks
   croit.ceph.cephfs_volume:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     name: projects
     max_mds: 2
     ignore_warnings: true
+  register: projects
 
-- name: Remove a volume (its pools stay)
+- name: Show the pools croit created for it
+  ansible.builtin.debug:
+    msg: "metadata {{ projects.volume.metadataPool }}, data {{ projects.volume.dataPools | join(', ') }}"
+
+- name: Turn standby-replay off
+  croit.ceph.cephfs_volume:
+    name: projects
+    allow_standby_replay: false
+
+- name: Remove a volume (its pools and their data stay)
   croit.ceph.cephfs_volume:
     name: scratch
     state: absent
@@ -89,18 +126,73 @@ volume:
     - Before the change in check mode; empty when the volume does not exist.
   returned: always
   type: dict
-  sample:
-    name: projects
-    id: 2
-    maxMds: 2
-    allowStandbyReplay: true
-    metadataPool: cephfs.projects.meta
-    dataPools: [cephfs.projects.data]
-    isDefault: false
+  contains:
+    name:
+      description: Name of the volume.
+      returned: when the volume exists
+      type: str
+      sample: projects
+    id:
+      description: Id of the filesystem in ceph.
+      returned: when the volume exists
+      type: int
+      sample: 2
+    maxMds:
+      description: Number of active MDS ranks.
+      returned: when the volume exists
+      type: int
+      sample: 2
+    allowStandbyReplay:
+      description: Whether standby-replay is enabled.
+      returned: when the volume exists
+      type: bool
+      sample: true
+    metadataPool:
+      description: Name of the metadata pool.
+      returned: when the volume exists
+      type: str
+      sample: cephfs.projects.meta
+    dataPools:
+      description: Names of the data pools.
+      returned: when the volume exists
+      type: list
+      elements: str
+      sample: [cephfs.projects.data]
+    isDefault:
+      description: Whether this is the cluster's default filesystem.
+      returned: when the volume exists
+      type: bool
+      sample: false
 task:
-  description: The last croit background task the change ran as, when there was one.
+  description: The last croit background task the change ran as.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: The task's id; use it with M(croit.ceph.task) or M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Create CephFS volume
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript. Empty while the task is listed without it.
+      returned: always
+      type: str
+      sample: Creating pools...
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

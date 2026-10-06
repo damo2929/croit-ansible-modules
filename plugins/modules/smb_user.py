@@ -22,8 +22,11 @@ short_description: Manage local users of an SMB gateway cluster on a croit clust
 version_added: 0.1.0
 description:
   - Create, update and delete the managed local users of a croit SMB cluster.
-  - Managed local users exist only on generation-2 clusters without Active Directory; the module fails on
-    any other cluster.
+  - A user is identified by its O(cluster) and O(name). Options that are not set keep their current value; O(uid) is
+    create-only and a different value for an existing user fails the task.
+  - Managed local users exist only on generation-2 clusters without Active Directory; the module fails on any other
+    cluster.
+  - The SMB password is write-only and is handled with O(update_password), like M(ansible.builtin.user).
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -38,7 +41,8 @@ attributes:
 options:
   cluster:
     description:
-      - The SMB cluster, by name (croit's description) or numeric service id.
+      - The SMB cluster the user belongs to, by name (croit's description, see M(croit.ceph.smb_cluster)) or numeric
+        service id. The task fails when the cluster does not exist.
     type: str
     required: true
   name:
@@ -58,17 +62,20 @@ options:
   uid:
     description:
       - Unix uid of the user, to align it with an external system. croit derives one when not set.
-      - Fixed once the user exists.
+      - Create-only; a different value for an existing user fails the task.
     type: int
   groups:
     description:
-      - The complete list of managed local groups the user is a member of, by name. Compared as a set.
+      - The complete list of managed local groups the user is a member of, by name. Compared as a set; V([]) removes the
+        user from every group.
+      - The groups must exist (see M(croit.ceph.smb_group)); unknown names fail the task. When not set, the memberships
+        are left alone.
     type: list
     elements: str
   password:
     description:
-      - SMB password of the user. Never stored by croit, so it cannot be compared; see O(update_password).
-      - Never returned or shown in diffs.
+      - SMB password of the user. croit does not return it, so it cannot be compared; see O(update_password).
+      - Never returned or shown in diffs. A user created without one cannot log in, and the module warns.
     type: str
   update_password:
     description:
@@ -77,22 +84,50 @@ options:
     type: str
     choices: [on_create, always]
     default: on_create
+notes:
+  - Deleting a user leaves dangling SIDs in the NT ACLs that name it; no data is deleted.
+  - Set C(no_log) on tasks that pass O(password).
+seealso:
+  - module: croit.ceph.smb_group
+    description: Manage the groups O(groups) refers to.
+  - module: croit.ceph.smb_cluster
+    description: Manage the SMB cluster a user belongs to.
+  - module: croit.ceph.smb_info
+    description: Read the users and groups of SMB clusters.
+  - name: croit API reference
+    description: The croit REST API this module uses (SMB gateways).
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
-- name: SMB user in two groups
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create an SMB user in two groups
   croit.ceph.smb_user:
     cluster: smb-office
     name: alice
     groups: [staff, projects]
     password: "{{ vault_alice_password }}"
+  no_log: true
+  register: alice
 
-- name: Rotate a password
+- name: Show the uid croit gave the user
+  ansible.builtin.debug:
+    msg: "alice has uid {{ alice.user.uid }}"
+
+- name: Take the user out of every group
+  croit.ceph.smb_user:
+    cluster: smb-office
+    name: alice
+    groups: []
+
+- name: Rotate a password (always reports a change)
   croit.ceph.smb_user:
     cluster: smb-office
     name: alice
     password: "{{ vault_alice_new_password }}"
     update_password: always
+  no_log: true
 
 - name: Remove a user
   croit.ceph.smb_user:
@@ -105,20 +140,63 @@ RETURN = r"""
 user:
   description:
     - The user as croit reports it after the change (C(SmbUserResponse) in the croit API), with an added
-      C(groups) list of group names.
-    - Before the change in check mode; empty when the user does not exist.
+      C(groups) list of group names. The password is never included.
+    - In check mode the user before the change. Empty when the user does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    id: 4
-    username: alice
-    uid: 1004
-    groupIds: [2]
-    groups: [staff]
+  contains:
+    id:
+      description: croit's id of the user.
+      returned: when the user exists
+      type: int
+      sample: 4
+    username:
+      description: The user name (O(name)).
+      returned: when the user exists
+      type: str
+      sample: alice
+    uid:
+      description: Unix uid backing the user on the gateway nodes.
+      returned: when the user exists
+      type: int
+      sample: 1004
+    groupIds:
+      description: croit ids of the groups the user is a member of.
+      returned: when the user exists
+      type: list
+      elements: int
+      sample: [2, 5]
+    groups:
+      description: Names of the groups the user is a member of.
+      returned: when the user exists
+      type: list
+      elements: str
+      sample: [projects, staff]
 task:
-  description: The last croit background task the change ran as, when there was one.
+  description: The last croit background task the change ran as, for example the user creation or the password change.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: croit's task id.
+      returned: always
+      type: int
+      sample: 655
+    name:
+      description: What the task did.
+      returned: always
+      type: str
+      sample: Create SMB user
+    state:
+      description: Final state of the task, one of C(FINISHED), C(FAILED), C(CANCELED), or C(RUNNING) with O(wait=false).
+      returned: always
+      type: str
+      sample: FINISHED
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "Creating user alice on node1 ... done"
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

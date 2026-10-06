@@ -17,9 +17,9 @@ module: pool_qos
 short_description: Manage RBD QoS limits of a Ceph pool on a croit cluster
 version_added: 0.1.0
 description:
-  - Sets and removes the RBD QoS limits of a pool. Every image in the pool inherits them, unless the image
-    sets its own (see the O(croit.ceph.rbd#module:qos) option of M(croit.ceph.rbd)).
-  - Only the limits named in O(limits) are managed, unless O(exclusive=true).
+  - Sets and removes the RBD QoS limits of a pool, identified by its name. Every image in the pool inherits
+    them, unless the image sets its own (see the O(croit.ceph.rbd#module:qos) option of M(croit.ceph.rbd)).
+  - Only the limits named in O(limits) are managed, unless O(exclusive=true). Only limits that differ are sent.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -41,24 +41,45 @@ options:
       - QoS limits keyed by the rbd config key croit lists for the pool, for example C(rbd_qos_iops_limit),
         C(rbd_qos_bps_limit), C(rbd_qos_read_iops_limit) or C(rbd_qos_write_bps_limit).
       - Values are integers. Byte limits also accept a binary unit such as V(100M). V(0) means no limit.
-      - A null value removes the limit, so images fall back to ceph's default.
+      - A V(null) value removes the limit, so images fall back to Ceph's default.
       - An unknown key fails the task and lists the keys croit offers.
     type: dict
     default: {}
   exclusive:
     description:
       - Remove every limit set on the pool that is not named in O(limits).
+      - With an empty O(limits), every limit is removed.
     type: bool
     default: false
+notes:
+  - If croit reports that it could not apply a limit, the module fails and returns croit's answer as C(applied).
+seealso:
+  - module: croit.ceph.rbd
+    description: Set QoS limits on a single image, overriding the pool's.
+  - module: croit.ceph.pool
+    description: Create the pool the limits apply to.
+  - name: croit API reference
+    description: The C(/pools/{pool}/qos) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RBD QoS settings
+    description: Upstream description of the C(rbd_qos_*) options.
+    link: https://docs.ceph.com/en/latest/rbd/rbd-config-ref/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Limit every image in the pool to 2000 IOPS and 200 MiB/s
   croit.ceph.pool_qos:
     pool: rbd-ssd
     limits:
       rbd_qos_iops_limit: 2000
       rbd_qos_bps_limit: 200M
+  register: qos
+
+- name: Show which limits are now set
+  ansible.builtin.debug:
+    msg: "{{ qos.qos | selectattr('value') | map(attribute='setting.command') | list }}"
 
 - name: Remove one limit
   croit.ceph.pool_qos:
@@ -76,18 +97,30 @@ RETURN = r"""
 qos:
   description:
     - The pool's QoS settings after the change (C(QosCommandsResponse) in the croit API), one row per
-      setting croit can limit. C(value) is null where no limit is set.
-    - Before the change in check mode.
+      setting croit can limit.
+    - In check mode, the settings before the change.
   returned: always
   type: list
   elements: dict
-  sample:
-    - setting:
+  contains:
+    setting:
+      description: The setting, with its rbd config key in C(command), a C(displayName) and a C(description).
+      returned: always
+      type: dict
+      sample:
         command: rbd_qos_iops_limit
         displayName: IOPS limit
         description: The desired limit of IO operations per second.
-      value: 2000
-      inherited: null
+    value:
+      description: The limit set on the pool, or V(null) where none is set.
+      returned: always
+      type: int
+      sample: 2000
+    inherited:
+      description: The value the pool falls back to, if croit reports one.
+      returned: always
+      type: int
+      sample: null
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

@@ -35,13 +35,62 @@ These are instructions for AI agents (and humans) working in this repository: th
 - [ ] The `DOCUMENTATION` block has `author` and `version_added`. `ansible-lint --profile production` and `galaxy-importer` on the built tarball both pass (DESIGN.md §5).
 - [ ] The docs are updated (see below).
 
+## Module documentation standard
+
+Every module's `DOCUMENTATION`, `EXAMPLES` and `RETURN` must meet all of the rules below. `ansible-test sanity` (validate-modules) and `antsibull-docs lint-collection-docs` must pass, and `ansible-doc croit.ceph.<module>` must render cleanly.
+
+**DOCUMENTATION**
+- **`short_description`:** a verb phrase with no trailing period, such as "Manage Ceph pools on a croit cluster".
+- **`description`:** at least two sentences covering:
+  - what the module manages, and how the resource is identified (its natural key);
+  - that options left unset are left alone;
+  - anything create-only, immutable or destructive.
+- **Every option:** at least one full sentence, ending in a period. Also give:
+  - units, and binary sizes such as V(10G);
+  - what an unset value means;
+  - what V(null) or an empty value does;
+  - whether the option is create-only;
+  - which other options it interacts with.
+- **Semantic markup:**
+  - O(option) and O(option=value) for options; V(value) for values;
+  - E(ENV_VAR) for environment variables; RV(return) for return values;
+  - M(croit.ceph.module) for other modules;
+  - C() only for literal code or API paths;
+  - U() or L() for links.
+- **`seealso`:** every module has one, containing:
+  - related `croit.ceph` modules (`module:` plus a one-line `description:`), always including the `*_info` or resource counterpart;
+  - the croit API docs (`link: https://www.croit.io/api-docs`, `name: croit API reference`);
+  - the relevant upstream Ceph docs page where one exists (`https://docs.ceph.com/en/latest/...`).
+- **`notes`:** required for anything that destroys data, disrupts clients, handles secrets or depends on an unverified croit behaviour.
+- **`attributes`:** say `check_mode` and `diff_mode` support honestly, and add `details` when support is partial.
+- **Fragments:** `croit.ceph.croit` + `.attributes` on every module; `.wait` / `.warnings` only where they apply.
+
+**EXAMPLES**
+- **Header:** start with the comment `# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).`, and leave out the connection options in the tasks.
+- **Every task:** a `name:`, and the FQCN (`croit.ceph.<module>`).
+- **Resource modules**, at least:
+  - create, or a typical use;
+  - an update of a single setting;
+  - a `register:` plus a use of the result (e.g. `ansible.builtin.debug`, or an `assert` on RV(...));
+  - delete or remove, when supported, including any `confirm_*` flag.
+- **Info modules:** at least two examples (everything, and a filtered read), plus a use of the registered result.
+- **Realism:** values must be realistic and valid for the options' types and choices, and the YAML must parse and pass ansible-lint.
+
+**RETURN**
+- **Every key:** `description`, `returned` (a precise condition, such as "when O(state=present)") and `type`.
+- **`dict` and `list` returns:** need either `contains:`, documenting the important fields with description, type and sample, or a realistic `sample`. Main resource returns should use `contains:`.
+- **Scalars:** need a `sample`.
+- **Secrets:** say how they are masked, and never put a real-looking secret in a sample (use V(********)).
+
 ## Keep the docs current (required in the same change)
 
 | When you… | Update |
 |---|---|
 | add, rename or change the status of a module | the README.md module table, and PLAN.md (tick it off or move it) |
 | change architecture, shared options, module_utils behaviour or the contract | DESIGN.md, including a new row in the **Decisions log** |
-| change requirements, install steps, auth or usage | README.md |
+| change requirements, install steps, auth or usage | README.md, and the matching guide in `docs/docsite/rst/` |
+| add or change a safety flag, secret handling or task/warning behaviour | `docs/docsite/rst/guide_safety.rst`, `guide_secrets.rst` or `guide_tasks_and_warnings.rst`, and the README safety table |
+| add a README or guide example | check it against the real module options |
 | change workflow, rules or tooling for contributors | AGENTS.md |
 | resolve an open question | PLAN.md §3 (mark it decided) and the DESIGN.md decisions log |
 

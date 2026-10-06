@@ -23,7 +23,8 @@ short_description: Manage shares of an SMB gateway cluster on a croit cluster
 version_added: 0.1.0
 description:
   - Create, update and delete the shares of a croit SMB cluster.
-  - Only options that are set are managed; anything left out keeps its current value.
+  - A share is identified by its O(cluster) and its O(name). Options that are not set keep their current value, and
+    options that do not apply to the cluster's type and generation fail the task.
   - On a generation-2 cluster a share's path, volume and ACL mode are fixed once it exists; access is managed
     through its on-disk ACL (O(grants)) and its C(smb.conf) additions (O(parameters), O(vfs_objects),
     O(vfs_objects_before)).
@@ -44,12 +45,13 @@ attributes:
 options:
   cluster:
     description:
-      - The SMB cluster, by name (croit's description) or numeric service id.
+      - The SMB cluster the share belongs to, by name (croit's description, see M(croit.ceph.smb_cluster)) or numeric
+        service id. The task fails when the cluster does not exist.
     type: str
     required: true
   name:
     description:
-      - Name of the share.
+      - Name of the share as clients see it, for example V(projects). It identifies the share within O(cluster).
     type: str
     required: true
   state:
@@ -62,17 +64,19 @@ options:
     default: present
   path:
     description:
-      - Directory in CephFS to export. Required when the share is created.
-      - Fixed once a generation-2 share exists.
+      - Directory in CephFS to export, for example V(/volumes/_nogroup/projects). Required when the share is created.
+      - Fixed once a generation-2 share exists; a generation-1 share can be moved to another directory.
     type: str
   volume:
     description:
-      - CephFS volume the share exports. Generation-2 clusters only; fixed once the share exists.
+      - CephFS volume the share exports. croit uses the cluster's volume when it is not set.
+      - Generation-2 clusters only; fixed once the share exists.
     type: str
   acl_mode:
     description:
       - ACL semantics of the share. V(posix) needs a simple cluster or an Active Directory cluster with
         customised idmap. Generation-2 clusters only; fixed once the share exists.
+      - New shares get V(windows) when it is not set.
     type: str
     choices: [windows, posix]
   grants:
@@ -81,25 +85,30 @@ options:
         on-disk ACL; afterwards it replaces the on-disk ACL, it is not merged into it.
       - Compared as a set. On-disk entries croit cannot express as a grant (deny entries, unusual rights
         masks) are dropped when the ACL is replaced; the module warns when that would happen.
+      - When not set, the on-disk ACL is left alone. Generation-2 clusters only.
     type: list
     elements: dict
     suboptions:
       name:
-        description: Bare user or group name, without an C(@) prefix.
+        description:
+          - Bare user or group name, without an C(@) prefix.
         type: str
         required: true
       group:
-        description: Whether O(grants[].name) is a group.
+        description:
+          - Whether O(grants[].name) is a group rather than a user.
         type: bool
         default: false
       access:
-        description: The access the principal gets.
+        description:
+          - The access the principal gets. V(read) allows reading and traversing, V(read_write) full read and write.
         type: str
         choices: [read, read_write]
         default: read_write
   parameters:
     description:
-      - Additional C(smb.conf) parameters of the share, replacing the stored set. Generation-2 clusters only.
+      - Additional C(smb.conf) parameters of the share as key/value pairs, replacing the stored set. V({}) removes
+        every additional parameter. Generation-2 clusters only.
     type: dict
   vfs_objects:
     description:
@@ -113,15 +122,18 @@ options:
     elements: str
   rw_access:
     description:
-      - Generation-1 simple clusters - read/write access for croit's admin user. V(true) when the share is created.
+      - Generation-1 simple clusters - whether croit's admin user has read/write access.
+      - New shares get V(true) when it is not set.
     type: bool
   ro_access:
     description:
-      - Generation-1 simple clusters - access for croit's read-only user. V(false) when the share is created.
+      - Generation-1 simple clusters - whether croit's read-only user has access.
+      - New shares get V(false) when it is not set.
     type: bool
   guest:
     description:
-      - Generation-1 simple clusters - guest access. V(false) when the share is created.
+      - Generation-1 simple clusters - whether guests may access the share without a password.
+      - New shares get V(false) when it is not set.
     type: bool
   rw_users:
     description:
@@ -135,14 +147,37 @@ options:
         Compared as a set.
     type: list
     elements: str
+notes:
+  - Replacing a generation-2 ACL with O(grants) changes who can access the data immediately, and drops on-disk entries
+    croit cannot express as a grant.
+  - Removing a share disconnects its clients; the exported directory and its data stay.
+  - The share ACL mode of a generation-1 share is assumed to be V(windows) when croit reports none. This has not yet
+    been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.smb_cluster
+    description: Manage the SMB cluster a share belongs to.
+  - module: croit.ceph.smb_user
+    description: Manage the local users O(grants) can refer to.
+  - module: croit.ceph.smb_group
+    description: Manage the local groups O(grants) can refer to.
+  - module: croit.ceph.smb_info
+    description: Read SMB clusters with their shares and ACLs.
+  - name: croit API reference
+    description: The croit REST API this module uses (SMB gateways).
+    link: https://www.croit.io/api-docs
+  - name: smb.conf reference
+    description: Samba's documentation of the parameters accepted by O(parameters) and the VFS modules.
+    link: https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html
 """
 
 EXAMPLES = r"""
-- name: Generation-2 share with an on-disk ACL
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create a generation-2 share with an on-disk ACL
   croit.ceph.smb_share:
     cluster: smb-office
     name: projects
-    path: /smb/projects
+    path: /volumes/_nogroup/projects
     grants:
       - name: admins
         group: true
@@ -150,11 +185,35 @@ EXAMPLES = r"""
       - name: auditor
         access: read
 
-- name: Apple-friendly VFS stack on an existing share
+- name: Add an Apple-friendly VFS stack to an existing share
   croit.ceph.smb_share:
     cluster: smb-office
     name: projects
     vfs_objects: [catia, fruit, streams_xattr]
+    parameters:
+      fruit:metadata: stream
+
+- name: Give the auditor write access as well
+  croit.ceph.smb_share:
+    cluster: smb-office
+    name: projects
+    grants:
+      - name: admins
+        group: true
+      - name: auditor
+  register: share
+
+- name: Show what croit reports for the share's ACL
+  ansible.builtin.debug:
+    var: share.acl.grants
+
+- name: Generation-1 Active Directory share
+  croit.ceph.smb_share:
+    cluster: smb-legacy-ad
+    name: finance
+    path: /finance
+    rw_users: ["@finance-admins"]
+    ro_users: ["@auditors", jdoe]
 
 - name: Remove the share (the directory and data stay)
   croit.ceph.smb_share:
@@ -167,17 +226,119 @@ RETURN = r"""
 share:
   description:
     - The share as croit reports it after the change (C(SmbGatewayShareResponse) in the croit API).
-    - Before the change in check mode; empty when the share does not exist.
+    - In check mode the share before the change. Empty when the share does not exist or was removed, and after a create
+      with O(wait=false) that ran as a task.
   returned: always
   type: dict
+  contains:
+    id:
+      description: croit's id of the share.
+      returned: when the share exists
+      type: int
+      sample: 3
+    serviceId:
+      description: croit service id of the SMB cluster.
+      returned: when the share exists
+      type: int
+      sample: 52
+    share:
+      description: The share's name (O(name)).
+      returned: when the share exists
+      type: str
+      sample: projects
+    path:
+      description: The exported CephFS directory.
+      returned: when the share exists
+      type: str
+      sample: /volumes/_nogroup/projects
+    volume:
+      description: The CephFS volume the share exports; null on generation-1 shares.
+      returned: when the share exists
+      type: str
+      sample: cephfs
+    aclMode:
+      description: ACL semantics, V(WINDOWS) or V(POSIX); null on generation-1 shares.
+      returned: when the share exists
+      type: str
+      sample: WINDOWS
+    parameters:
+      description: Additional C(smb.conf) parameters of a generation-2 share.
+      returned: when the share exists
+      type: dict
+      sample: {"fruit:metadata": stream}
+    vfsObjects:
+      description: Additional VFS modules stacked after croit's.
+      returned: when the share exists
+      type: list
+      elements: str
+      sample: [catia, fruit, streams_xattr]
+    vfsObjectsBefore:
+      description: Additional VFS modules stacked ahead of croit's.
+      returned: when the share exists
+      type: list
+      elements: str
+      sample: []
+    rw:
+      description: Generation-1 simple shares - read/write access for croit's admin user.
+      returned: when the share exists
+      type: bool
+      sample: true
+    rwUsers:
+      description: Generation-1 Active Directory shares - users and groups with read/write access.
+      returned: when the share exists
+      type: list
+      elements: str
+      sample: ["@finance-admins"]
 acl:
-  description: The share's on-disk access list (C(ShareAclReadResult)), when O(grants) is managed on an existing share.
-  returned: when O(grants) is set and the share existed
+  description:
+    - The share's on-disk access list (C(ShareAclReadResult)) as croit reads it off the share root.
+    - After the change when it was replaced, otherwise before it.
+  returned: when O(grants) is set and the share already existed
   type: dict
+  contains:
+    grants:
+      description: One entry per principal with C(name), C(group) and C(access) (V(READ) or V(READ_WRITE)).
+      returned: always
+      type: list
+      elements: dict
+      sample: [{name: admins, group: true, access: READ_WRITE}, {name: auditor, group: false, access: READ}]
+    unrepresentable:
+      description: On-disk entries croit cannot express as a grant; they are dropped when the ACL is replaced.
+      returned: always
+      type: list
+      elements: str
+      sample: []
+    unresolved:
+      description: Raw ids or SIDs of entries whose principal no longer resolves to a name.
+      returned: always
+      type: list
+      elements: str
+      sample: ["S-1-5-21-1004336348-1177238915-682003330-1105"]
 task:
-  description: The last croit background task the change ran as, when there was one.
+  description: The last croit background task the change ran as, for example the share creation or the ACL replacement.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: croit's task id.
+      returned: always
+      type: int
+      sample: 640
+    name:
+      description: What the task did.
+      returned: always
+      type: str
+      sample: Set share ACL
+    state:
+      description: Final state of the task, one of C(FINISHED), C(FAILED), C(CANCELED), or C(RUNNING) with O(wait=false).
+      returned: always
+      type: str
+      sample: FINISHED
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "Writing ACL of /volumes/_nogroup/projects ... done"
 """
 
 import posixpath

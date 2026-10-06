@@ -30,7 +30,11 @@ description:
     or joined to an Active Directory domain (O(type=active_directory)).
   - croit SMB clusters have no name of their own. This module identifies a cluster by O(name), which croit
     stores as the cluster's description, so it must be unique.
-  - Only options that are set are managed; anything left out keeps its current value.
+  - Options that are not set keep their current value. Options that only apply to the other O(type) fail the task.
+  - O(type), O(domain), O(netbios_domain_name) and O(volume) are create-only; a different O(type), O(domain) or
+    O(netbios_domain_name) for an existing cluster fails the task instead of recreating it.
+  - Deleting a cluster needs O(confirm_delete=true), and disruptive changes (migration to generation 2, a new
+    O(service_dns_name)) need O(confirm_action=true).
   - Shares, managed local users and groups are managed with M(croit.ceph.smb_share), M(croit.ceph.smb_user)
     and M(croit.ceph.smb_group).
 author:
@@ -69,27 +73,33 @@ options:
     choices: [simple, active_directory]
   servers:
     description:
-      - The complete list of member servers. Servers not listed are taken out of the cluster.
-      - Required when the cluster is created.
+      - The complete list of member servers. Servers not listed are taken out of the cluster; an empty list is
+        refused (use O(state=absent) instead).
+      - Required when the cluster is created. Adding a member to an V(active_directory) cluster needs
+        O(domain_admin_user) and O(domain_admin_password).
       - The interface and VLAN of an existing member cannot be changed; remove the server and add it again.
     type: list
     elements: dict
     suboptions:
       server:
-        description: Hostname or numeric id of the server.
+        description:
+          - Hostname or numeric croit id of the server.
         type: str
         required: true
       nic:
-        description: Interface the virtual IPs are bound on, by croit NIC name, Linux interface name or MAC.
+        description:
+          - Interface the virtual IPs are bound on, by croit NIC name, Linux interface name, MAC address or croit id.
+          - When not set, no interface is sent and croit picks one.
         type: str
       vlan:
-        description: VLAN tag on that interface, when the virtual IPs are bound on a VLAN.
+        description:
+          - VLAN tag on that interface, when the virtual IPs are bound on a VLAN. The VLAN must exist on O(servers[].nic).
         type: int
   virtual_ips:
     description:
       - Virtual IPs croit distributes across the healthy members. Compared as a set, after normalising the
         address notation.
-      - Required when the cluster is created.
+      - Required when the cluster is created. When not set on an existing cluster, the virtual IPs are left alone.
     type: list
     elements: str
   volume:
@@ -99,7 +109,8 @@ options:
     type: str
   ceph_snapshots:
     description:
-      - Expose CephFS snapshots as Windows "Previous Versions". Needs Samba 4.24.4 or later on every member.
+      - Whether to expose CephFS snapshots as Windows "Previous Versions". Needs Samba 4.24.4 or later on every member.
+      - croit disables it when a cluster is created without it.
     type: bool
   global_parameters:
     description:
@@ -113,14 +124,17 @@ options:
     type: dict
     suboptions:
       parameters:
-        description: Additional C(smb.conf) parameters of every share.
+        description:
+          - Additional C(smb.conf) parameters of every share, as key/value pairs.
         type: dict
       vfs_objects:
-        description: Additional VFS modules stacked after the ones croit manages, in this order.
+        description:
+          - Additional VFS modules stacked after the ones croit manages, in this order.
         type: list
         elements: str
       vfs_objects_before:
-        description: Additional VFS modules stacked ahead of the ones croit manages, in this order.
+        description:
+          - Additional VFS modules stacked ahead of the ones croit manages, in this order.
         type: list
         elements: str
   initial_users:
@@ -131,14 +145,17 @@ options:
     elements: dict
     suboptions:
       username:
-        description: Lowercase POSIX user name.
+        description:
+          - Lowercase POSIX user name.
         type: str
         required: true
       password:
-        description: Initial SMB password. Never stored by croit, never returned.
+        description:
+          - Initial SMB password. It is never returned or shown in diffs.
         type: str
       uid:
-        description: Unix uid of the user. croit derives one when not set.
+        description:
+          - Unix uid of the user. croit derives one when not set.
         type: int
   domain:
     description:
@@ -188,15 +205,18 @@ options:
     elements: dict
     suboptions:
       domain:
-        description: Domain the block applies to (C(*) for the default).
+        description:
+          - Domain the block applies to, or V(*) for the default block.
         type: str
         required: true
       backend:
-        description: Winbind idmap backend, for example V(rid) or V(autorid).
+        description:
+          - Winbind idmap backend, for example V(rid) or V(autorid).
         type: str
         required: true
       options:
-        description: Backend options such as C(range).
+        description:
+          - Backend options such as C(range), as key/value pairs. Values are sent as strings.
         type: dict
   domain_admin_user:
     description:
@@ -214,6 +234,8 @@ options:
       - V(2) on a generation-1 cluster (or one whose migration was interrupted) migrates it in one
         downtime window, in which the cluster restarts and every share's ACL is rebuilt. That needs
         O(confirm_action=true). A cluster cannot go back to generation 1.
+      - Only for existing clusters; new clusters always get croit's current generation, and setting it on create
+        fails the task.
     type: int
     choices: [2]
   migrate_posix_shares:
@@ -226,6 +248,7 @@ options:
     description:
       - Must be V(true) for disruptive one-off changes, which interrupt clients - migrating to
         generation 2 and changing O(service_dns_name).
+      - Not needed for any other change.
     type: bool
     default: false
   confirm_delete:
@@ -236,13 +259,37 @@ options:
     default: false
 notes:
   - Passwords are write-only. They are sent when they are needed and never compared, returned or shown
-    in diffs.
+    in diffs. Set C(no_log) on tasks that pass them.
+  - Removing a cluster or a member disconnects the SMB clients served by it; the CephFS data stays.
   - The fixed C(root)/C(croit-ro) passwords of legacy generation-1 clusters are not managed; migrate the
     cluster to generation 2 instead.
+  - With O(wait=false), RV(cluster) is empty after a create, because croit lists the cluster only once its task ran.
+  - The cluster's name is croit's description, and croit is assumed to keep it verbatim. This follows the croit API
+    reference and has not yet been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.smb_share
+    description: Manage the shares of an SMB cluster.
+  - module: croit.ceph.smb_user
+    description: Manage the local users of a simple SMB cluster.
+  - module: croit.ceph.smb_group
+    description: Manage the local groups of a simple SMB cluster.
+  - module: croit.ceph.smb_info
+    description: Read SMB clusters, shares, users and groups.
+  - name: croit API reference
+    description: The croit REST API this module uses (SMB gateways).
+    link: https://www.croit.io/api-docs
+  - name: Ceph SMB manager module
+    description: Upstream Ceph documentation on serving CephFS over SMB.
+    link: https://docs.ceph.com/en/latest/mgr/smb/
+  - name: smb.conf reference
+    description: Samba's documentation of the parameters accepted by O(global_parameters) and O(share_defaults).
+    link: https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html
 """
 
 EXAMPLES = r"""
-- name: SMB cluster with managed local users
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Create an SMB cluster with managed local users
   croit.ceph.smb_cluster:
     name: smb-office
     type: simple
@@ -255,8 +302,9 @@ EXAMPLES = r"""
     initial_users:
       - username: admin
         password: "{{ vault_smb_admin_password }}"
+  no_log: true
 
-- name: SMB cluster joined to Active Directory
+- name: Create an SMB cluster joined to Active Directory
   croit.ceph.smb_cluster:
     name: smb-ad
     type: active_directory
@@ -272,10 +320,22 @@ EXAMPLES = r"""
     domain_admin_password: "{{ vault_ad_password }}"
   no_log: true
 
-- name: Migrate a legacy cluster to generation 2
+- name: Add a third virtual IP and enable Previous Versions
+  croit.ceph.smb_cluster:
+    name: smb-office
+    virtual_ips: [10.0.0.200/24, 10.0.0.201/24, 10.0.0.202/24]
+    ceph_snapshots: true
+  register: smb
+
+- name: Show the members and their health
+  ansible.builtin.debug:
+    msg: "{{ smb.cluster.servers | map(attribute='healthy') | list }}"
+
+- name: Migrate a legacy cluster to generation 2 (restarts it)
   croit.ceph.smb_cluster:
     name: smb-legacy
     generation: 2
+    migrate_posix_shares: [scratch]
     confirm_action: true
 
 - name: Remove a cluster (the shared data stays)
@@ -290,18 +350,112 @@ cluster:
   description:
     - The cluster as croit reports it after the change - the C(SmbGatewayConfigResponse) list entry merged
       with the C(SmbGatewayServiceResponse) detail (servers and shares).
-    - Before the change in check mode; empty when the cluster does not exist.
+    - In check mode the cluster before the change. Empty when the cluster does not exist or was removed, and after a
+      create with O(wait=false).
   returned: always
   type: dict
+  contains:
+    serviceId:
+      description: croit's id of the SMB service.
+      returned: when the cluster exists
+      type: int
+      sample: 52
+    description:
+      description: The cluster's name (O(name)).
+      returned: when the cluster exists
+      type: str
+      sample: smb-office
+    type:
+      description: croit's cluster type, V(simple) or V(active-directory).
+      returned: when the cluster exists
+      type: str
+      sample: simple
+    configGeneration:
+      description: Configuration generation; V(1) is the legacy template, V(2) or later the current one.
+      returned: when the cluster exists
+      type: int
+      sample: 2
+    migrationInProgress:
+      description: Whether a generation-2 migration was interrupted and can be resumed with O(generation=2).
+      returned: when the cluster exists
+      type: bool
+      sample: false
+    virtualIps:
+      description: The cluster's virtual IPs.
+      returned: when the cluster exists
+      type: list
+      elements: str
+      sample: [10.0.0.200/24, 10.0.0.201/24]
+    cephSnapshots:
+      description: Whether CephFS snapshots are exposed as "Previous Versions".
+      returned: when the cluster exists
+      type: bool
+      sample: true
+    globalParameters:
+      description: Additional C(smb.conf) C([global]) parameters.
+      returned: when the cluster exists
+      type: dict
+      sample: {"server min protocol": SMB3}
+    shareDefaults:
+      description: Advanced configuration every share renders, with C(parameters), C(vfsObjects) and C(vfsObjectsBefore).
+      returned: when the cluster exists
+      type: dict
+      sample: {parameters: {}, vfsObjects: [], vfsObjectsBefore: []}
+    servers:
+      description: The members, each with C(server) (croit id), C(nic), C(vlan), C(ip), C(virtualIps) and C(healthy).
+      returned: when the cluster exists
+      type: list
+      elements: dict
+      sample: [{server: 1, nic: eth0, vlan: null, ip: 10.0.0.11, virtualIps: [10.0.0.200/24], healthy: true}]
+    shares:
+      description: The cluster's shares (C(SmbGatewayShareResponse)); see M(croit.ceph.smb_share).
+      returned: when the cluster exists
+      type: list
+      elements: dict
+      sample: [{id: 3, share: projects, path: /volumes/_nogroup/projects, aclMode: windows}]
+    domain:
+      description: Active Directory realm.
+      returned: for V(active_directory) clusters
+      type: str
+      sample: MY-ORG.LOCAL
+    serviceDnsName:
+      description: The service DNS name clients reach the cluster by.
+      returned: for V(active_directory) clusters
+      type: str
+      sample: files
 task:
-  description: The last croit background task the change ran as, when there was one.
+  description: The last croit background task the change ran as.
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: croit's task id.
+      returned: always
+      type: int
+      sample: 618
+    name:
+      description: What the task did.
+      returned: always
+      type: str
+      sample: Create SMB cluster
+    state:
+      description: Final state of the task, one of C(FINISHED), C(FAILED), C(CANCELED), or C(RUNNING) with O(wait=false).
+      returned: always
+      type: str
+      sample: FINISHED
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "Configuring samba on node1 ... done"
 tasks:
-  description: Every croit background task the change ran, in order.
+  description:
+    - Every croit background task the change ran, in order, for example a migration followed by a member addition.
+      Each entry has the same fields as RV(task).
   returned: when a task ran
   type: list
   elements: dict
+  sample: [{id: 617, name: Migrate SMB cluster, state: FINISHED}, {id: 618, name: Add SMB server, state: FINISHED}]
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

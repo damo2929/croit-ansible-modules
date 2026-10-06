@@ -34,6 +34,19 @@ attributes:
     support: full
   diff_mode:
     support: full
+notes:
+  - Changing, removing or deleting the address croit reaches the server on is refused unless
+    O(allow_management_ip_change=true), also in check mode.
+seealso:
+  - module: croit.ceph.server_nic
+    description: Manage the parent interface.
+  - module: croit.ceph.server_bond
+    description: Create the bond a VLAN often sits on.
+  - module: croit.ceph.server_info
+    description: Read servers with their interfaces and VLANs.
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -47,11 +60,12 @@ options:
     required: true
   vlan:
     description:
-      - VLAN tag (1-4094).
+      - VLAN tag (1-4094). Together with O(server) and O(nic) it identifies the VLAN interface.
     type: int
     required: true
   state:
     description:
+      - V(present) creates the VLAN interface or changes its addresses.
       - V(absent) deletes the VLAN and needs O(confirm_delete=true).
     type: str
     choices: [present, absent]
@@ -79,14 +93,21 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Public network on VLAN 110 of the bond
   croit.ceph.server_vlan:
     server: storage-07
     nic: bond0
     vlan: 110
     ip: 10.110.0.17/24
+  register: public
 
-- name: Remove VLAN 120
+- name: Show the VLAN interface's name on the node
+  ansible.builtin.debug:
+    msg: "{{ public.vlan.linuxName }} has {{ public.vlan.ip }}"
+
+- name: Remove VLAN 120 (its addresses go with it)
   croit.ceph.server_vlan:
     server: storage-07
     nic: bond0
@@ -99,15 +120,40 @@ RETURN = r"""
 vlan:
   description:
     - The VLAN as croit reports it after the change (C(VlanInfo) in the croit API).
-    - Before the change in check mode; empty when it does not exist.
+    - Before the change in check mode; empty when it does not exist or after O(state=absent).
   returned: always
   type: dict
-  sample:
-    id: 512
-    nic: 41
-    vlan: 110
-    ip: 10.110.0.17/24
-    ip6: null
+  contains:
+    id:
+      description: croit's numeric VLAN record id.
+      returned: when the VLAN exists
+      type: int
+      sample: 512
+    nic:
+      description: croit id of the parent interface.
+      returned: when the VLAN exists
+      type: int
+      sample: 41
+    vlan:
+      description: VLAN tag.
+      returned: when the VLAN exists
+      type: int
+      sample: 110
+    linuxName:
+      description: Name of the VLAN interface on the node.
+      returned: when the VLAN exists
+      type: str
+      sample: bond0.110
+    ip:
+      description: IPv4 address with prefix length, or null.
+      returned: when the VLAN exists
+      type: str
+      sample: 10.110.0.17/24
+    ip6:
+      description: IPv6 address with prefix length, or null.
+      returned: when the VLAN exists
+      type: str
+      sample: null
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

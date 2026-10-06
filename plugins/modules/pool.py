@@ -20,9 +20,10 @@ module: pool
 short_description: Manage Ceph pools on a croit cluster
 version_added: 0.1.0
 description:
-  - Create, update and delete Ceph pools through the croit API.
-  - Only options that are set are managed; anything left out keeps its current value.
-  - Settings that ceph cannot change after creation (replicated vs. erasure coded, and the erasure code
+  - Creates, updates and deletes Ceph pools through the croit API. A pool is identified by its O(name).
+  - Only options that are set are managed; anything left out keeps its current value. Only the settings
+    that differ are sent, so a converged pool causes no write.
+  - Settings that Ceph cannot change after creation (replicated or erasure coded, and the erasure code
     profile) are compared, and a difference fails the task instead of recreating the pool.
 author:
   - Damien Dye (@damo2929)
@@ -39,7 +40,7 @@ attributes:
 options:
   name:
     description:
-      - Name of the pool.
+      - Name of the pool, which identifies it. Renaming pools is not supported.
     type: str
     required: true
   state:
@@ -56,12 +57,13 @@ options:
     type: str
   description:
     description:
-      - Free text croit keeps about what the pool is for.
+      - Free text croit keeps about what the pool is for. Ceph itself does not store it.
+      - An empty string and an unset description compare as equal.
     type: str
   size:
     description:
       - Number of replicas of a replicated pool.
-      - Not valid for erasure coded pools.
+      - Not valid for erasure coded pools, where croit derives it from O(data_chunks) and O(parity_chunks).
     type: int
   min_size:
     description:
@@ -75,33 +77,34 @@ options:
     type: int
   crush_rule:
     description:
-      - CRUSH rule to place the pool with, by name or numeric id.
+      - CRUSH rule to place the pool with, by name or numeric id. An unknown rule fails and lists the known ones.
       - When creating a replicated pool without it, croit uses the cluster's default rule. For an erasure
-        coded pool, ceph creates a rule from O(device_class).
+        coded pool, Ceph creates a rule from O(device_class).
     type: str
   erasure_coding:
     description:
       - Create an erasure coded pool instead of a replicated one.
-      - Cannot be changed after the pool exists.
+      - Cannot be changed after the pool exists; a different value fails the task.
     type: bool
   data_chunks:
     description:
       - Erasure code data chunks (k). croit uses 4 when not set.
-      - Cannot be changed after the pool exists.
+      - Cannot be changed after the pool exists; a different value fails the task.
     type: int
   parity_chunks:
     description:
       - Erasure code parity chunks (m). croit uses 2 when not set.
-      - Cannot be changed after the pool exists.
+      - Cannot be changed after the pool exists; a different value fails the task.
     type: int
   device_class:
     description:
-      - Device class an erasure coded pool is placed on when O(crush_rule) is not set.
-      - Only used when the pool is created.
+      - Device class, such as V(hdd) or V(ssd), an erasure coded pool is placed on when O(crush_rule) is not set.
+      - Only used when the pool is created, and never compared afterwards.
     type: str
   fast_read:
     description:
-      - Read all k+m shards of an erasure coded pool in parallel.
+      - Read all k+m shards of an erasure coded pool in parallel, trading bandwidth for latency.
+      - Only valid for erasure coded pools.
     type: bool
   quota_max_bytes:
     description:
@@ -113,15 +116,16 @@ options:
     type: int
   compression:
     description:
-      - BlueStore compression of the pool. Only the sub-options that are set are managed.
+      - BlueStore compression of the pool. Only the sub-options that are set are managed; the others keep
+        their current value.
     type: dict
     suboptions:
       algorithm:
-        description: Compression algorithm.
+        description: Compression algorithm the pool compresses with. V(none) turns compression off.
         type: str
         choices: [lz4, snappy, zlib, zstd, none]
       mode:
-        description: When the pool compresses.
+        description: When the pool compresses data. V(none) never compresses.
         type: str
         choices: [none, passive, aggressive, force]
       min_blob_size:
@@ -131,12 +135,12 @@ options:
         description: Chunks larger than this many bytes are split before they are compressed.
         type: int
       required_ratio:
-        description: How much smaller a compressed chunk must be for the compressed version to be kept.
+        description: How much smaller a compressed chunk must be for the compressed version to be kept, for example V(0.875).
         type: float
   volume:
     description:
       - CephFS volume using the pool, for O(application=cephfs). croit uses the default filesystem when not set.
-      - Only used when the pool is created.
+      - Only used when the pool is created, and never compared afterwards.
     type: str
   confirm_delete:
     description:
@@ -144,13 +148,29 @@ options:
       - The pool's delete protection is lifted automatically before deleting.
     type: bool
     default: false
+notes:
+  - Deleting a pool destroys every object in it and cannot be undone.
+  - Changing O(size), O(crush_rule) or O(pg_num) of a pool that holds data starts data movement.
+seealso:
+  - module: croit.ceph.pool_info
+    description: Read pools and their details.
+  - module: croit.ceph.pool_qos
+    description: Manage the RBD QoS limits of a pool.
+  - module: croit.ceph.crush_rule
+    description: Create the CRUSH rules pools are placed with.
+  - name: croit API reference
+    description: The C(/pools) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph pools
+    description: Upstream documentation of pool settings.
+    link: https://docs.ceph.com/en/latest/rados/operations/pools/
 """
 
 EXAMPLES = r"""
-- name: Replicated RBD pool
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Replicated RBD pool on SSDs
   croit.ceph.pool:
-    api_url: https://croit-mgmt/api
-    api_token: "{{ vault_croit_token }}"
     name: rbd-ssd
     application: rbd
     size: 3
@@ -170,10 +190,16 @@ EXAMPLES = r"""
       algorithm: zstd
       mode: aggressive
 
-- name: Set a quota
+- name: Set a quota and show what changed
   croit.ceph.pool:
     name: rbd-ssd
     quota_max_bytes: 20T
+  register: result
+  diff: true
+
+- name: Show the pool id
+  ansible.builtin.debug:
+    msg: "rbd-ssd has pool id {{ result.pool.poolId }}"
 
 - name: Delete a pool and all its data
   croit.ceph.pool:
@@ -186,28 +212,125 @@ RETURN = r"""
 pool:
   description:
     - The pool as croit reports it after the change (C(CephPoolResponse) in the croit API).
-    - Before the change in check mode; empty when the pool does not exist.
+    - In check mode, the pool before the change. Empty when the pool does not exist or was deleted.
   returned: always
   type: dict
-  sample:
-    name: rbd-ssd
-    poolId: 3
-    application: rbd
-    size: 3
-    minSize: 2
-    pgNum: 128
-    crushRule: 1
-    erasureCoding: false
-    quotaMaxBytes: 0
-    quotaMaxObjects: 0
+  contains:
+    name:
+      description: The pool's name.
+      returned: always
+      type: str
+      sample: rbd-ssd
+    poolId:
+      description: Ceph's numeric pool id.
+      returned: always
+      type: int
+      sample: 3
+    application:
+      description: The application using the pool.
+      returned: always
+      type: str
+      sample: rbd
+    size:
+      description: Number of replicas, or k+m for an erasure coded pool.
+      returned: always
+      type: int
+      sample: 3
+    minSize:
+      description: Minimum number of replicas to serve I/O.
+      returned: always
+      type: int
+      sample: 2
+    pgNum:
+      description: Number of placement groups.
+      returned: always
+      type: int
+      sample: 128
+    crushRule:
+      description: Numeric id of the CRUSH rule.
+      returned: always
+      type: int
+      sample: 1
+    erasureCoding:
+      description: Whether the pool is erasure coded.
+      returned: always
+      type: bool
+      sample: false
+    dataChunks:
+      description: Erasure code data chunks (k), or V(null) for a replicated pool.
+      returned: always
+      type: int
+      sample: null
+    parityChunks:
+      description: Erasure code parity chunks (m), or V(null) for a replicated pool.
+      returned: always
+      type: int
+      sample: null
+    quotaMaxBytes:
+      description: Byte quota, V(0) for unlimited.
+      returned: always
+      type: int
+      sample: 21990232555520
+    quotaMaxObjects:
+      description: Object quota, V(0) for unlimited.
+      returned: always
+      type: int
+      sample: 0
+    deleteProtected:
+      description: Whether the pool is protected from deletion.
+      returned: always
+      type: bool
+      sample: true
 compression:
-  description: The pool's compression settings after the change. Only returned when O(compression) is set.
+  description: The pool's compression settings after the change (C(PoolCompressionSettings) in the croit API).
   returned: when O(compression) is set and the pool exists
   type: dict
+  contains:
+    algorithm:
+      description: Compression algorithm, as croit spells it.
+      returned: always
+      type: str
+      sample: Zstd
+    mode:
+      description: Compression mode, as croit spells it.
+      returned: always
+      type: str
+      sample: Aggressive
+    minBlobSize:
+      description: Minimum blob size in bytes, or V(null) for Ceph's default.
+      returned: always
+      type: int
+      sample: null
+    maxBlobSize:
+      description: Maximum blob size in bytes, or V(null) for Ceph's default.
+      returned: always
+      type: int
+      sample: null
+    requiredRatio:
+      description: Required compression ratio, or V(null) for Ceph's default.
+      returned: always
+      type: float
+      sample: null
 task:
-  description: The croit background task the change ran as, when there was one.
-  returned: when a task ran
+  description: The croit background task the change ran as. Creating a pool always runs as a task.
+  returned: when the change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, usable with M(croit.ceph.task).
+      returned: always
+      type: int
+      sample: 412
+    state:
+      description: The task's state; V(FINISHED) after a successful wait.
+      returned: always
+      type: str
+      sample: FINISHED
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: Creating pool rbd-ssd ... done
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

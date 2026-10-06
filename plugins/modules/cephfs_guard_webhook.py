@@ -19,8 +19,9 @@ module: cephfs_guard_webhook
 short_description: Manage cephfs-guard alerting webhooks on a croit cluster
 version_added: 0.1.0
 description:
-  - Add, update and remove the webhooks cephfs-guard POSTs detection alerts to, for one guarded CephFS volume.
-  - A webhook is identified by its O(volume) and O(url).
+  - Add, update and remove the webhooks cephfs-guard POSTs detection alerts to, for one guarded CephFS
+    volume. A webhook is identified by its O(volume) and O(url).
+  - Only O(alert_timeout) can change on an existing webhook; a different URL is a different webhook.
   - croit applies webhook changes on the next deploy of the volume's cephfs-guard instances.
 author:
   - Damien Dye (@damo2929)
@@ -37,35 +38,59 @@ options:
   volume:
     description:
       - The CephFS volume whose cephfs-guard sends the alerts. cephfs-guard must be enabled for it
-        (see M(croit.ceph.cephfs_guard)).
+        (see M(croit.ceph.cephfs_guard)); otherwise O(state=present) fails and O(state=absent) reports no change.
     type: str
     required: true
   url:
     description:
-      - URL the alerts are POSTed to.
+      - URL the alerts are POSTed to. Leading and trailing whitespace is ignored when matching.
       - Treated as a secret, because such URLs often carry an access token; it is masked in logs, results and diffs.
     type: str
     required: true
   alert_timeout:
     description:
       - How long cephfs-guard waits for the webhook per alert, such as V(5s) or V(500ms).
-        croit uses V(5s) when a webhook is added without it.
+        croit uses V(5s) when a webhook is added without it. When not set, an existing webhook keeps its timeout.
       - Not to be confused with O(timeout), the timeout of this module's own requests to croit.
     type: str
   state:
     description:
-      - Whether the webhook should exist.
+      - Whether the webhook should exist. Removing a webhook only stops the alerts it receives.
     type: str
     choices: [present, absent]
     default: present
+notes:
+  - It is assumed that croit returns the stored URL verbatim, which the module matches on. This has not
+    been verified against a live croit cluster.
+seealso:
+  - module: croit.ceph.cephfs_guard
+    description: Enable and configure cephfs-guard for the volume.
+  - module: croit.ceph.cephfs_guard_info
+    description: List the webhooks of a guarded volume (URLs masked).
+  - name: croit API reference
+    description: The croit REST API, including the C(/services/cephfsguard/{configId}/webhooks) endpoints.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Send cephfs-guard alerts to the on-call system
   croit.ceph.cephfs_guard_webhook:
     volume: cephfs
     url: "https://alerts.example.com/hooks/{{ vault_alert_token }}"
     alert_timeout: 10s
+  register: hook
+
+- name: Show the webhook id croit assigned
+  ansible.builtin.debug:
+    msg: "Webhook {{ hook.webhook.id }} waits {{ hook.webhook.timeout }} per alert"
+
+- name: Shorten its timeout
+  croit.ceph.cephfs_guard_webhook:
+    volume: cephfs
+    url: "https://alerts.example.com/hooks/{{ vault_alert_token }}"
+    alert_timeout: 3s
 
 - name: Remove it
   croit.ceph.cephfs_guard_webhook:
@@ -77,14 +102,27 @@ EXAMPLES = r"""
 RETURN = r"""
 webhook:
   description:
-    - The webhook as croit reports it after the change (C(CephfsGuardWebhookResponse)), with the URL masked.
-      Empty when the webhook does not exist.
+    - The webhook as croit reports it after the change (C(CephfsGuardWebhookResponse) in the croit API),
+      with the URL masked.
+    - Before the change in check mode; empty when the webhook does not exist.
   returned: always
   type: dict
-  sample:
-    id: 3
-    url: "********"
-    alert_timeout: 10s
+  contains:
+    id:
+      description: Id croit gave the webhook.
+      returned: when the webhook exists
+      type: int
+      sample: 3
+    url:
+      description: Always masked as V(********).
+      returned: when the webhook exists
+      type: str
+      sample: "********"
+    timeout:
+      description: How long cephfs-guard waits for the webhook per alert.
+      returned: when the webhook exists
+      type: str
+      sample: 10s
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

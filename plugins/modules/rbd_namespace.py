@@ -17,7 +17,7 @@ module: rbd_namespace
 short_description: Manage RBD namespaces on a croit cluster
 version_added: 0.1.0
 description:
-  - Create and delete RBD namespaces in a pool.
+  - Creates and deletes RBD namespaces in a pool. A namespace is identified by O(pool) and O(name).
   - croit refuses to delete a namespace that still holds images, so deleting one never destroys data.
   - Requires Ceph Nautilus or later.
 author:
@@ -33,27 +33,46 @@ attributes:
 options:
   pool:
     description:
-      - Pool the namespace is in.
+      - Pool the namespace is in. It must exist.
     type: str
     required: true
   name:
     description:
-      - Name of the namespace.
+      - Name of the namespace within O(pool).
     type: str
     required: true
   state:
     description:
       - Whether the namespace should exist.
+      - V(absent) needs no confirmation, because croit refuses to delete a namespace that still holds images.
     type: str
     choices: [present, absent]
     default: present
+seealso:
+  - module: croit.ceph.rbd
+    description: Create images in a namespace.
+  - module: croit.ceph.rbd_info
+    description: Read the images in a namespace.
+  - name: croit API reference
+    description: The C(/pools/{pool}/rbd-namespaces) endpoints this module uses.
+    link: https://www.croit.io/api-docs
+  - name: Ceph RBD namespaces
+    description: Upstream documentation of RBD namespaces.
+    link: https://docs.ceph.com/en/latest/man/8/rbd/
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Namespace per tenant
   croit.ceph.rbd_namespace:
     pool: rbd-ssd
     name: tenant-a
+  register: ns
+
+- name: Show every namespace in the pool
+  ansible.builtin.debug:
+    msg: "{{ ns.namespaces }}"
 
 - name: Remove an empty namespace
   croit.ceph.rbd_namespace:

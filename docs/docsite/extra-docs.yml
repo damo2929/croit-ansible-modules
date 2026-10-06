@@ -1,0 +1,8 @@
+---
+sections:
+  - title: Guides
+    toctree:
+      - guide_getting_started
+      - guide_safety
+      - guide_tasks_and_warnings
+      - guide_secrets

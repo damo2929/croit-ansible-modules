@@ -77,6 +77,35 @@ jobs:
         working-directory: ansible_collections/croit/ceph
         run: python tools/check_spec_drift.py
 
+  docs:
+    name: Build the docsite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ansible_collections/croit/ceph
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tools
+        run: pip install ansible-core antsibull-docs
+      - name: Lint collection docs (incl. extra docs and links)
+        working-directory: ansible_collections/croit/ceph
+        run: antsibull-docs lint-collection-docs --plugin-docs .
+      - name: Build HTML with warnings as errors
+        env:
+          ANSIBLE_COLLECTIONS_PATH: ${{ github.workspace }}
+        run: |
+          mkdir -p docbuild
+          antsibull-docs sphinx-init --use-current --fail-on-error --dest-dir docbuild croit.ceph
+          cd docbuild
+          pip install -r requirements.txt
+          ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docsite
+          path: docbuild/build/html
+
   galaxy-importer:
     name: Build and galaxy-importer
     runs-on: ubuntu-latest

@@ -18,9 +18,12 @@ short_description: Manage croit settings
 version_added: 0.1.0
 description:
   - Sets a croit setting (croit's own behaviour, not a Ceph option), or puts it back on croit's default.
+  - A setting is identified by O(name). The value is converted to the setting's type (C(BOOL), C(INT) or
+    C(STRING)) before it is sent, and a value that does not fit fails before anything is written.
+  - The module compares the requested value with what croit reports and only writes when they differ.
   - Some settings reconfigure or restart croit services when they change; croit runs the change as a task.
-  - Use M(croit.ceph.setting_info) with O(croit.ceph.setting_info#module:available=true) to list the settings
-    and their types.
+  - Use M(croit.ceph.setting_info) with O(croit.ceph.setting_info#module:available=true) to list the settings,
+    their types and their defaults.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -33,33 +36,65 @@ attributes:
     support: full
   diff_mode:
     support: full
+    details:
+      - The diff shows whether a value is stored (C(state)) and the stored value.
 options:
   name:
     description:
-      - Name of the setting, as croit's settings list shows it.
+      - Name of the setting, exactly as croit's settings list shows it.
+      - An unknown name fails the task and lists the settings croit offers.
     type: str
     required: true
   value:
     description:
       - Value to store. Required with O(state=present).
+      - Converted to the setting's type before sending; for a C(BOOL) setting V(yes), V(on) and V(1) also mean
+        V(true).
       - Compared as croit reports it, so V(true) matches V("true") and V(30) matches V("30").
     type: raw
   state:
     description:
-      - V(present) stores O(value), even when it equals croit's default.
+      - V(present) stores O(value). Storing a value equal to croit's default still counts as a change, because
+        croit then keeps a row for the setting.
       - V(absent) drops the stored value, which puts the setting back on croit's default.
     type: str
     choices: [present, absent]
     default: present
+notes:
+  - Changing a setting can restart croit services; plan such changes like any other maintenance.
+seealso:
+  - module: croit.ceph.setting_info
+    description: List croit settings, their types, defaults and current values.
+  - module: croit.ceph.ceph_config
+    description: Manage Ceph options rather than croit settings.
+  - name: croit API reference
+    description: The C(/settings) endpoints this module uses.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
-- name: Store a croit setting
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+# croit does not publish a fixed list of setting names; look them up first.
+- name: List every setting croit offers
+  croit.ceph.setting_info:
+    available: true
+  register: all_settings
+
+- name: Show their names and types
+  ansible.builtin.debug:
+    msg: "{{ all_settings.settings | map(attribute='name') | list }}"
+
+- name: Store a boolean setting
   croit.ceph.setting:
     name: "{{ setting_name }}"
     value: true
+  register: stored
 
-- name: Back to croit's default
+- name: Show what croit now reports
+  ansible.builtin.debug:
+    msg: "{{ stored.setting.name }} = {{ stored.setting.value }} (default {{ stored.setting.default }})"
+
+- name: Put the setting back on croit's default
   croit.ceph.setting:
     name: "{{ setting_name }}"
     state: absent
@@ -69,19 +104,78 @@ RETURN = r"""
 setting:
   description:
     - The setting as croit reports it after the change (C(CroitSettingResponse) in the croit API).
-    - Before the change in check mode.
+    - In check mode, the setting before the change.
   returned: always
   type: dict
-  sample:
-    name: example setting
-    type: BOOL
-    value: "true"
-    default: "false"
-    customized: true
+  contains:
+    name:
+      description: What the setting is called, as croit's settings list shows it.
+      returned: always
+      type: str
+      sample: example setting
+    type:
+      description: What the value holds, one of C(STRING), C(INT) or C(BOOL).
+      returned: always
+      type: str
+      sample: BOOL
+    level:
+      description: How prominently croit offers the setting, one of C(SIMPLE), C(ADVANCED) or C(DEBUG).
+      returned: always
+      type: str
+      sample: SIMPLE
+    value:
+      description: What the setting is worth on this cluster, as a string; its default where nothing is stored.
+      returned: always
+      type: str
+      sample: "true"
+    default:
+      description: What the setting is worth when nothing is stored, as a string.
+      returned: always
+      type: str
+      sample: "false"
+    customized:
+      description: Whether this cluster stores a value for the setting.
+      returned: always
+      type: bool
+      sample: true
+    description:
+      description: What the setting does, and what changing it costs.
+      returned: always
+      type: str
+      sample: Enables the example behaviour.
 task:
-  description: The croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The croit background task the change ran as (C(ManagedThreadTask) in the croit API).
+    - With O(wait=true) this is the finished task. With O(wait=false) it can still be running; follow it with
+      M(croit.ceph.task).
+  returned: when the change ran as a croit task
   type: dict
+  contains:
+    id:
+      description: The task's id, which M(croit.ceph.task) and M(croit.ceph.task_info) accept.
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Set ceph config
+    state:
+      description: The task's state, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.module import CroitModule

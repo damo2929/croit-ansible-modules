@@ -21,8 +21,12 @@ short_description: Manage exports of a croit NFS gateway cluster
 version_added: 0.1.0
 description:
   - Create, update and delete the CephFS exports of a croit NFS cluster.
-  - An export is identified by its O(cluster) and the O(nfs_path) clients mount, not by croit's numeric id.
-  - Only options that are set are managed; anything left out keeps its current value.
+  - An export is identified by its O(cluster) and the O(nfs_path) clients mount, not by croit's numeric export id.
+    Paths are compared normalised, so V(/projects/) and V(/projects) name the same export.
+  - Options that are not set keep their current value. croit replaces an export as a whole on update, so the module
+    sends the current settings merged with the requested ones.
+  - O(volume) can only be set when an export is created. Removing an export cuts off its clients but never deletes
+    CephFS data.
 author:
   - Damien Dye (@damo2929)
 extends_documentation_fragment:
@@ -37,7 +41,8 @@ attributes:
 options:
   cluster:
     description:
-      - The NFS cluster, by name (see M(croit.ceph.nfs_cluster)) or croit service id.
+      - The NFS cluster the export belongs to, by name (see M(croit.ceph.nfs_cluster)) or croit service id.
+      - The task fails when the cluster does not exist.
     type: str
     required: true
   nfs_path:
@@ -48,56 +53,95 @@ options:
   state:
     description:
       - Whether the export should exist.
-      - V(absent) removes the export. Clients that mount it lose access, but no CephFS data is touched,
-        so no confirmation is needed.
+      - V(absent) removes the export. Clients that mount it lose access, but no CephFS data is touched, so no
+        confirmation is needed.
     type: str
     choices: [present, absent]
     default: present
   path:
     description:
-      - The CephFS directory to export, for example V(/volumes/_nogroup/projects). Required to create an export.
+      - The CephFS directory to export, for example V(/volumes/_nogroup/projects).
+      - Required to create an export; can be changed on an existing export.
     type: str
   volume:
     description:
-      - CephFS volume to export. nfs-ganesha clusters need it when an export is created; croit-nfs serves only
-        Ceph's default filesystem and takes none.
-      - Fixed at creation; a different value for an existing export fails the task.
+      - CephFS volume to export.
+      - Clusters running nfs-ganesha need it when an export is created; croit-nfs serves only Ceph's default filesystem,
+        so O(volume) must be left unset there.
+      - Create-only. A different value for an existing export fails the task.
     type: str
   access:
     description:
-      - The complete list of clients allowed to mount the export. Order does not matter.
-      - croit creates an export without any client access when this is not set.
+      - The complete list of clients allowed to mount the export. Order does not matter, and subnets are compared
+        normalised, so V(10.0.0.5/24) means V(10.0.0.0/24).
+      - When not set, an existing export keeps its access list and a new export is created without any client access.
+      - An empty list removes all client access.
     type: list
     elements: dict
     suboptions:
       subnet:
-        description: Client subnet such as V(10.0.0.0/24); a single address means just that host.
+        description:
+          - Client subnet such as V(10.0.0.0/24). A single address without prefix length means just that host.
         type: str
         required: true
       rw:
-        description: Read and write access; V(false) gives read-only access.
+        description:
+          - Whether clients in the subnet may write. V(false) gives read-only access.
         type: bool
         default: false
   nfs3:
     description:
-      - Serve the export over NFSv3.
+      - Whether to serve the export over NFSv3.
+      - New exports are not served over NFSv3 unless this is V(true). When not set, an existing export keeps its setting.
+      - At least one of O(nfs3) and O(nfs4) must end up enabled.
     type: bool
   nfs4:
     description:
-      - Serve the export over NFSv4. New exports are served over NFSv4 unless this is V(false).
+      - Whether to serve the export over NFSv4.
+      - New exports are served over NFSv4 unless this is V(false). When not set, an existing export keeps its setting.
     type: bool
+notes:
+  - Removing an export or a client from O(access) cuts off those clients immediately; the CephFS data is not touched.
+seealso:
+  - module: croit.ceph.nfs_cluster
+    description: Manage the NFS cluster an export belongs to.
+  - module: croit.ceph.nfs_info
+    description: Read NFS clusters and all their exports.
+  - module: croit.ceph.cephfs_subvolume
+    description: Create the CephFS subvolume to export.
+  - name: croit API reference
+    description: The croit REST API this module uses (NFS gateways).
+    link: https://www.croit.io/api-docs
+  - name: CephFS and NFS
+    description: Upstream Ceph documentation on exporting CephFS over NFS.
+    link: https://docs.ceph.com/en/latest/cephfs/nfs/
 """
 
 EXAMPLES = r"""
-- name: Export a CephFS subvolume read-write to one subnet, read-only to another
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
+- name: Export a CephFS subvolume read-write to one subnet and read-only to another
   croit.ceph.nfs_export:
     cluster: nfs-prod
     nfs_path: /projects
     path: /volumes/_nogroup/projects
-    volume: cephfs
     access:
       - {subnet: 10.0.0.0/24, rw: true}
       - {subnet: 10.1.0.0/16}
+  register: export
+
+- name: Show the export's croit id
+  ansible.builtin.debug:
+    msg: "/projects is export {{ export.export.id }} of service {{ export.export.serviceId }}"
+
+- name: Export from a named CephFS volume on an nfs-ganesha cluster
+  croit.ceph.nfs_export:
+    cluster: nfs-legacy
+    nfs_path: /archive
+    path: /archive
+    volume: cephfs-archive
+    access:
+      - {subnet: 10.2.0.0/24}
 
 - name: Also serve NFSv3
   croit.ceph.nfs_export:
@@ -105,7 +149,7 @@ EXAMPLES = r"""
     nfs_path: /projects
     nfs3: true
 
-- name: Remove the export
+- name: Remove the export (clients lose access, data is kept)
   croit.ceph.nfs_export:
     cluster: nfs-prod
     nfs_path: /projects
@@ -115,18 +159,47 @@ EXAMPLES = r"""
 RETURN = r"""
 export:
   description:
-    - The export as croit reports it after the change (C(NfsGatewayExport)). Before the change in check mode; empty when
-      the export does not exist.
+    - The export as croit reports it after the change (C(NfsGatewayExport)).
+    - In check mode the export before the change. Empty when the export does not exist or was removed.
   returned: always
   type: dict
-  sample:
-    id: 7
-    serviceId: 41
-    nfsPath: /projects
-    path: /volumes/_nogroup/projects
-    volume: cephfs
-    access: [{subnet: 10.0.0.0/24, rw: true}]
-    protocols: {nfs3: false, nfs4: true}
+  contains:
+    id:
+      description: croit's id of the export.
+      returned: when the export exists
+      type: int
+      sample: 7
+    serviceId:
+      description: croit service id of the NFS cluster.
+      returned: when the export exists
+      type: int
+      sample: 41
+    nfsPath:
+      description: The path clients mount (O(nfs_path)).
+      returned: when the export exists
+      type: str
+      sample: /projects
+    path:
+      description: The exported CephFS directory (O(path)).
+      returned: when the export exists
+      type: str
+      sample: /volumes/_nogroup/projects
+    volume:
+      description: The CephFS volume, or null for the cluster's default filesystem.
+      returned: when the export exists
+      type: str
+      sample: null
+    access:
+      description: Clients allowed to mount the export, each with C(subnet) and C(rw).
+      returned: when the export exists
+      type: list
+      elements: dict
+      sample: [{subnet: 10.0.0.0/24, rw: true}, {subnet: 10.1.0.0/16, rw: false}]
+    protocols:
+      description: NFS versions the export is served over, as C(nfs3) and C(nfs4) booleans.
+      returned: when the export exists
+      type: dict
+      sample: {nfs3: false, nfs4: true}
 """
 
 import ipaddress

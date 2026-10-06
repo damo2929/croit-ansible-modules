@@ -42,7 +42,8 @@ attributes:
 options:
   iqn:
     description:
-      - IQN of the initiator.
+      - IQN of the initiator, for example V(iqn.1998-01.com.vmware:esx01-12345678). This is how the module
+        finds it.
     type: str
     required: true
     aliases: [name]
@@ -87,11 +88,11 @@ options:
     elements: dict
     suboptions:
       pool:
-        description: RBD pool of the disk.
+        description: RBD pool of the image to map to the initiator.
         type: str
         required: true
       image:
-        description: RBD image name of the disk.
+        description: RBD image name to map to the initiator.
         type: str
         required: true
       size:
@@ -113,9 +114,32 @@ options:
     description:
       - croit service id of the iSCSI gateway. Only needed if croit reports more than one.
     type: int
+seealso:
+  - module: croit.ceph.iscsi_group
+    description: Share disks between several initiators through a host group.
+  - module: croit.ceph.iscsi_disk
+    description: Grow, unexport or delete exported disks.
+  - module: croit.ceph.iscsi_gateway
+    description: Manage the iSCSI gateway and its target.
+  - module: croit.ceph.iscsi_info
+    description: List the initiators and their disks.
+  - name: Ceph iSCSI gateway
+    description: Upstream documentation of the Ceph iSCSI gateway.
+    link: https://docs.ceph.com/en/latest/rbd/iscsi-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
+notes:
+  - The CHAP password is never returned. RV(client.password) is masked as C(********).
+  - CHAP lengths are checked before anything is sent; the username needs 8 to 64 and the password 12 to 16
+    characters.
+  - Disks the initiator gets through its host group are not counted as its own, so O(exclusive=true) never
+    unmaps a group's disks.
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Allow an ESXi host onto the target and map a new 2 TiB datastore
   croit.ceph.iscsi_client:
     iqn: iqn.1998-01.com.vmware:esx01-12345678
@@ -125,10 +149,30 @@ EXAMPLES = r"""
       - pool: iscsi
         image: datastore1
         size: 2T
+  register: esx01
 
-- name: Put the host in a group instead
+- name: Show the WWNs of the disks mapped to the host
+  ansible.builtin.debug:
+    msg: "{{ esx01.client.luns | map(attribute='wwn') | list }}"
+
+- name: Map exactly these disks to the host
   croit.ceph.iscsi_client:
     iqn: iqn.1998-01.com.vmware:esx01-12345678
+    disks:
+      - pool: iscsi
+        image: datastore1
+    exclusive: true
+
+- name: Rotate the CHAP password
+  croit.ceph.iscsi_client:
+    iqn: iqn.1998-01.com.vmware:esx01-12345678
+    chap_username: esx01-user
+    chap_password: "{{ vault_esx01_chap_new }}"
+    update_password: always
+
+- name: Put a host without own disks in a group
+  croit.ceph.iscsi_client:
+    iqn: iqn.1998-01.com.vmware:esx02-87654321
     group: esx-cluster
 
 - name: Remove the initiator (images are kept)
@@ -144,15 +188,36 @@ client:
     - Empty when the initiator does not exist. Shows the state before the change in check mode.
   returned: always
   type: dict
-  sample:
-    name: iqn.1998-01.com.vmware:esx01-12345678
-    username: esx01-user
-    password: "********"
-    group: ""
+  contains:
+    name:
+      description: IQN of the initiator.
+      returned: when the initiator exists
+      type: str
+      sample: iqn.1998-01.com.vmware:esx01-12345678
+    username:
+      description: CHAP username.
+      returned: when the initiator exists
+      type: str
+      sample: esx01-user
+    password:
+      description: CHAP password, always masked as C(********) when one is set.
+      returned: when the initiator exists
+      type: str
+      sample: "********"
+    group:
+      description: Host group of the initiator, or an empty string.
+      returned: when the initiator exists
+      type: str
+      sample: ""
     luns:
-      - pool: iscsi
-        image: datastore1
-        wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
+      description: Disks mapped to the initiator, each with C(pool), C(image) and C(wwn).
+      returned: when the initiator exists
+      type: list
+      elements: dict
+      sample:
+        - pool: iscsi
+          image: datastore1
+          wwn: 3f0e8c7a-0c1d-4a5e-9b6f-2d3c4b5a6f70
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join

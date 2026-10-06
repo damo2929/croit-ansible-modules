@@ -47,6 +47,24 @@ attributes:
       - O(state=restarted) and O(state=rolling_restarted) report a change and are skipped in check mode.
   diff_mode:
     support: full
+notes:
+  - Removing a MON or MDS can break the cluster or a filesystem; it is refused without
+    O(confirm_delete=true), also in check mode. croit's own "last MDS" warning additionally needs
+    O(ignore_warnings=true).
+  - O(state=restarted) and O(state=rolling_restarted) are one-shot actions; they always report a change.
+seealso:
+  - module: croit.ceph.service_info
+    description: Read services, filtered by server, type or id.
+  - module: croit.ceph.osd
+    description: Create OSDs and manage whether they are in and running.
+  - module: croit.ceph.rgw_service
+    description: Add and configure S3 gateways.
+  - name: Ceph monitor operations
+    description: Adding and removing Ceph monitors.
+    link: https://docs.ceph.com/en/latest/rados/operations/add-or-rm-mons/
+  - name: croit API reference
+    description: The croit REST API this module uses.
+    link: https://www.croit.io/api-docs
 options:
   server:
     description:
@@ -102,6 +120,8 @@ options:
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Add a monitor
   croit.ceph.service:
     server: storage-04
@@ -115,6 +135,11 @@ EXAMPLES = r"""
     type: mds
     mds_volume: cephfs
     state: started
+  register: mds
+
+- name: Show the new service's id
+  ansible.builtin.debug:
+    msg: "MDS service {{ mds.service.id }} is {{ 'running' if mds.service.running else 'stopped' }}"
 
 - name: Stop the S3 gateway on one node
   croit.ceph.service:
@@ -129,7 +154,7 @@ EXAMPLES = r"""
     state: rolling_restarted
     wait_timeout: 3600
 
-- name: Remove a monitor
+- name: Remove a monitor (the cluster must keep a quorum without it)
   croit.ceph.service:
     server: storage-04
     type: mon
@@ -144,15 +169,93 @@ service:
       exist, and the state before the change in check mode.
   returned: when one service is managed
   type: dict
+  contains:
+    id:
+      description: croit's numeric service id.
+      returned: when the service exists
+      type: int
+      sample: 23
+    type:
+      description: Service type, for example V(mon), V(mds) or V(radosgw).
+      returned: when the service exists
+      type: str
+      sample: mds
+    server:
+      description: croit id of the server it runs on.
+      returned: when the service exists
+      type: int
+      sample: 4
+    serverHostname:
+      description: Hostname of the server it runs on.
+      returned: when the service exists
+      type: str
+      sample: storage-04
+    running:
+      description: Whether the service is running.
+      returned: when the service exists
+      type: bool
+      sample: true
+    state:
+      description: Whether croit keeps the service enabled.
+      returned: when the service exists
+      type: str
+      sample: enabled
+    multiServer:
+      description: Whether the service runs on several servers (gateways).
+      returned: when the service exists
+      type: bool
+      sample: false
 services:
-  description: The services or OSDs that were (or in check mode would be) restarted, as C(id) and C(server), plus C(osd) for OSDs.
+  description: The services or OSDs that were (or in check mode would be) restarted.
   returned: with O(state=restarted) or O(state=rolling_restarted)
   type: list
   elements: dict
+  contains:
+    id:
+      description: Service id, or OSD id when C(osd) is V(true).
+      returned: always
+      type: int
+      sample: 23
+    server:
+      description: Server id the restart was limited to, or null for every server of the service.
+      returned: always
+      type: int
+      sample: null
+    osd:
+      description: Whether the entry is an OSD.
+      returned: always
+      type: bool
+      sample: false
 task:
-  description: The croit background task the change ran as, when there was one.
+  description: The croit background task the change ran as, when there was one (C(TaskResponse) in the croit API).
   returned: when a task ran
   type: dict
+  contains:
+    id:
+      description: Task id, usable with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as croit's task list shows it.
+      returned: always
+      type: str
+      sample: Update server
+    state:
+      description: V(WAITING), V(RUNNING), V(FINISHED), V(FAILED) or V(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: "done"
 """
 
 import time

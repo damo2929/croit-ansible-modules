@@ -63,15 +63,17 @@ options:
     default: present
   serial_number:
     description:
-      - Serial number the subsystem reports.
+      - Serial number the subsystem reports to hosts. Left alone when not set.
+      - On a new subsystem it is applied right after creation, which needs O(wait=true).
     type: str
   model_number:
     description:
-      - Model name the subsystem reports.
+      - Model name the subsystem reports to hosts. Left alone when not set.
+      - On a new subsystem it is applied right after creation, which needs O(wait=true).
     type: str
   max_namespaces:
     description:
-      - Maximum number of disks that can be attached.
+      - Maximum number of disks (namespaces) that can be attached to the subsystem.
     type: int
   ana_states:
     description:
@@ -87,7 +89,7 @@ options:
         type: str
         required: true
       state:
-        description: Access state.
+        description: Access state the subsystem advertises on that target service.
         type: str
         choices: [optimized, non_optimized, inaccessible]
         required: true
@@ -119,9 +121,28 @@ options:
     default: false
 notes:
   - Changes after a creation (serial number, ANA states, attachments) are only applied with O(wait=true).
+  - Detaching a disk with O(exclusive=true) removes the namespace from every connected host; detaching a host cuts
+    its access to every namespace of the subsystem.
+seealso:
+  - module: croit.ceph.nvmeof_gateway
+    description: Manage the NVMe-oF cluster and its target services.
+  - module: croit.ceph.nvmeof_disk
+    description: Export the RBD images that become namespaces.
+  - module: croit.ceph.nvmeof_host
+    description: Allow the hosts that connect to the subsystem.
+  - module: croit.ceph.nvmeof_info
+    description: Read subsystems and what is attached to them.
+  - name: Ceph NVMe-oF gateway
+    description: Upstream documentation of the Ceph NVMe over Fabrics gateway.
+    link: https://docs.ceph.com/en/latest/rbd/nvmeof-overview/
+  - name: croit API reference
+    description: The croit REST API this module talks to.
+    link: https://www.croit.io/api-docs
 """
 
 EXAMPLES = r"""
+# All examples assume api_url and api_token are set with module_defaults for group/croit.ceph.all (see the collection README).
+
 - name: Subsystem with two namespaces, open to two ESXi hosts
   croit.ceph.nvmeof_subsystem:
     gateway: nvme-prod
@@ -138,6 +159,21 @@ EXAMPLES = r"""
     hosts:
       - nqn.2014-08.org.nvmexpress:uuid:esxi-01
       - nqn.2014-08.org.nvmexpress:uuid:esxi-02
+  register: ds1
+
+- name: Show the server the subsystem is optimized on
+  ansible.builtin.debug:
+    msg: "{{ ds1.subsystem.optimizedOnFormatted }}"
+
+- name: Preview making exactly these hosts allowed
+  croit.ceph.nvmeof_subsystem:
+    gateway: nvme-prod
+    nqn: nqn.2016-06.io.spdk:datastore1
+    hosts:
+      - nqn.2014-08.org.nvmexpress:uuid:esxi-01
+    exclusive: true
+  check_mode: true
+  diff: true
 
 - name: Make exactly these hosts allowed
   croit.ceph.nvmeof_subsystem:
@@ -158,26 +194,117 @@ EXAMPLES = r"""
 RETURN = r"""
 subsystem:
   description:
-    - The subsystem as croit reports it after the change (C(NvmeOFSubsystemResponse)).
+    - The subsystem as croit reports it after the change (C(NvmeOFSubsystemResponse) in the croit API).
     - Before the change in check mode; empty when it does not exist.
   returned: always
   type: dict
-  sample:
-    id: 4
-    gatewayId: 1
-    nqn: nqn.2016-06.io.spdk:datastore1
-    maxNamespaces: 64
-    disks: [7, 8]
-    hosts: [3]
+  contains:
+    id:
+      description: croit id of the subsystem.
+      returned: when the subsystem exists
+      type: int
+      sample: 4
+    gatewayId:
+      description: croit id of the NVMe-oF cluster.
+      returned: when the subsystem exists
+      type: int
+      sample: 1
+    nqn:
+      description: NQN of the subsystem.
+      returned: when the subsystem exists
+      type: str
+      sample: nqn.2016-06.io.spdk:datastore1
+    serialNumber:
+      description: Serial number the subsystem reports.
+      returned: when the subsystem exists
+      type: str
+      sample: DS1-0001
+    modelNumber:
+      description: Model name the subsystem reports.
+      returned: when the subsystem exists
+      type: str
+      sample: Ceph RBD over NVMe-oF
+    maxNamespaces:
+      description: Maximum number of namespaces.
+      returned: when the subsystem exists
+      type: int
+      sample: 64
+    disks:
+      description: croit ids of the attached disks.
+      returned: when the subsystem exists
+      type: list
+      elements: int
+      sample: [7, 8]
+    hosts:
+      description: croit ids of the allowed hosts.
+      returned: when the subsystem exists
+      type: list
+      elements: int
+      sample: [3]
+    anaStates:
+      description: Per-service access states, each with C(serviceId) and C(anaState).
+      returned: when the subsystem exists
+      type: list
+      elements: dict
+      sample:
+        - serviceId: 21
+          anaState: optimized
+    optimizedOn:
+      description: croit id of the target service the subsystem is optimized on, null when none is.
+      returned: when the subsystem exists
+      type: int
+      sample: 21
+    optimizedOnFormatted:
+      description: Hostname of the server the subsystem is optimized on, empty when none is.
+      returned: when the subsystem exists
+      type: str
+      sample: nvme1
 task:
-  description: The last croit background task the change ran as.
-  returned: when a task ran
+  description:
+    - The last croit background task the change ran as (C(ManagedTask) in the croit API).
+    - With O(wait=true) this is the task's final state. With O(wait=false) it may still be running; follow it
+      with M(croit.ceph.task).
+  returned: when the change ran as a croit background task
   type: dict
+  contains:
+    id:
+      description: croit task id, for use with M(croit.ceph.task) and M(croit.ceph.task_info).
+      returned: always
+      type: int
+      sample: 412
+    name:
+      description: What the task does, as the croit task list shows it.
+      returned: always
+      type: str
+      sample: Add NVMe-oF subsystem
+    state:
+      description: State of the task, one of C(WAITING), C(RUNNING), C(FINISHED), C(FAILED) or C(CANCELED).
+      returned: always
+      type: str
+      sample: FINISHED
+    done:
+      description: Whether the task has ended.
+      returned: always
+      type: bool
+      sample: true
+    output:
+      description: The task's transcript.
+      returned: always
+      type: str
+      sample: ""
 tasks:
-  description: Every croit background task the change ran as, in order.
-  returned: when a task ran
+  description:
+    - Every croit background task the change ran as, in the order they ran. Each entry has the same fields as
+      RV(task).
+  returned: when the change ran as one or more croit background tasks
   type: list
   elements: dict
+  sample:
+    - id: 412
+      name: Add NVMe-oF subsystem
+      state: FINISHED
+      done: true
+      output: ""
 """
 
 from ansible_collections.croit.ceph.plugins.module_utils.client import path_join
